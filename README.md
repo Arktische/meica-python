@@ -1,4 +1,4 @@
-# MEICA AI Python Package
+# MEICA Python Package
 
 An all-in-one package makes AI training much easier.
 
@@ -21,7 +21,7 @@ pip install meica
 Or from source:
 
 ```bash
-git clone https://github.com/Arktische/meica.git
+git clone https://github.com/Arktische/meica-python.git
 cd meica
 pip install -e .
 ```
@@ -35,10 +35,18 @@ python example.py --config config/trainer.yaml config/hypervar.yaml
 
 ### 1. Write two YAML config files
 
-- Best practice is to split training config into two files: one for “training components”, one for “volatile hyperparameters”.
-- Why: enables ablation studies, variant switching, and fast tuning without touching the component topology.
-- Components config: model, dataset/dataloader, optimizer, LR scheduler, etc.
-- Hyperparameters config: `epoch`, `batch_size`, `lr`, `max_grad_norm`, etc., and can be reused in the components config via `${...}` references.
+- Best Practice
+  - split training config into two files: one for *training components*, one for *volatile hyperparameters*.
+- Why?
+  - enables ablation studies, variant switching, and fast tuning without touching the component topology.
+- Components for training:
+  - model
+  - dataset/dataloader
+  - optimizer
+  - LR scheduler
+  - ...
+- Hyperparameters
+  - `epoch`, `batch_size`, `lr`, `max_grad_norm`, etc., and can be reused in the components config via `${...}` references.
 
 #### [hypervar.yaml](config/hypervar.yaml)
 ```yaml
@@ -55,9 +63,6 @@ lr: 0.1
 checkpoint_every_n_steps: 1
 checkpoint_dir: "checkpoints"
 
-# equivalent to:
-# self.module = torch.nn.Linear(in_features=2, out_features=1)
-# self.module.requires_grad_(True)
 module:
   type: torch.nn.Linear
   args:
@@ -65,11 +70,6 @@ module:
     out_features: 1
   requires_grad_: true
 
-# equivalent to:
-# self.train_dataloader = torch.utils.data.DataLoader(
-#   dataset=example.MyDataset(num=4), 
-#   abatch_size=2, shuffle=True, num_workers=1, drop_last=False
-# )
 train_dataloader:
   type: torch.utils.data.DataLoader
   args:
@@ -100,6 +100,7 @@ lr_scheduler:
     step_size: 1
 ```
 
+
 ### 2. Implement a custom Trainer
 ```python
 import torch.nn.functional as F
@@ -118,7 +119,7 @@ trainer.fit()
 
 ---
 
-## YAML Configuration Usage
+## YAML Configuration Syntax
 
 ### Construct objects
 
