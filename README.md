@@ -1,10 +1,10 @@
 # MEICA Python Package
 
-An all-in-one package makes AI training much easier.
+An all-in-one package makes AI training much easier. Here are high-level components below:
 
-- **trainer**: Config-driven training framework, 
-  - **Only need to write the forward logic**.
-  - Support IDE intellisense and static type checking. Even the injected dynamic types and attributes from the config file!
+- `meica.Trainer`: Config-driven training framework, 
+  1. **You Just write the forward logic**.
+  2. All types injected by conf **support IDE intelisense andstatic type checking**!
 - Coming soon:
   - Diffusion/FlowMatching trainer support
     - QwenImageEdit
