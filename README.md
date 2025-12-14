@@ -102,6 +102,7 @@ lr_scheduler:
 
 
 ### 2. Implement a custom Trainer
+Just write your forward logic and return the loss by overriding `train_step(self, batch, step)` method.
 ```python
 import torch.nn.functional as F
 from meica import Trainer
