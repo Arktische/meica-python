@@ -2,7 +2,7 @@ import argparse
 import os
 import importlib
 import inspect
-from typing import Any, Dict, Set, List, Tuple, Optional
+from typing import Any, Dict, Set, List, Tuple, Optional, Union, Mapping
 from omegaconf import OmegaConf
 from trainer import Trainer
 
@@ -144,11 +144,23 @@ def _generate_subclass_stub_text(
     return "\n".join(lines) + "\n"
 
 
-def generate_trainer_base_stub(config_path: str) -> str:
+def generate_trainer_base_stub(configs: List[Union[str, Dict[str, Any], Mapping[str, Any]]]) -> str:
     """Generate a Trainer.pyi stub file based on a config-driven Trainer."""
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"config file '{config_path}' not found")
-    config = OmegaConf.to_container(OmegaConf.load(config_path), resolve=False)
+    if not isinstance(configs, list) or len(configs) == 0:
+        raise ValueError("at least one config must be provided")
+    merged_conf = None
+    for cfg in configs:
+        if isinstance(cfg, str):
+            if os.path.exists(cfg):
+                piece = OmegaConf.load(cfg)
+            else:
+                piece = OmegaConf.create(cfg)
+        elif isinstance(cfg, Mapping):
+            piece = OmegaConf.create(cfg)
+        else:
+            raise TypeError("config must be a mapping or a path string")
+        merged_conf = piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
+    config = OmegaConf.to_container(merged_conf, resolve=False)
     trainer = Trainer()
     trainer.configure(config)
     types = _collect_attr_types(trainer, config)
@@ -217,7 +229,9 @@ def generate_trainer_base_stub(config_path: str) -> str:
     return out_path
 
 
-def generate_subclass_stub(config_path: str, qualified_class: str) -> str:
+def generate_subclass_stub(
+    configs: List[Union[str, Dict[str, Any], Mapping[str, Any]]], qualified_class: str
+) -> str:
     """Generate a .pyi stub for a Trainer subclass using a sample config."""
     cls = _import_class(qualified_class)
     if not issubclass(cls, Trainer):
@@ -226,9 +240,21 @@ def generate_subclass_stub(config_path: str, qualified_class: str) -> str:
             f"class '{qualified_class}' must inherit from {expected}"
         )
     instance = cls()
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"config file '{config_path}' not found")
-    config = OmegaConf.to_container(OmegaConf.load(config_path), resolve=False)
+    if not isinstance(configs, list) or len(configs) == 0:
+        raise ValueError("at least one config must be provided")
+    merged_conf = None
+    for cfg in configs:
+        if isinstance(cfg, str):
+            if os.path.exists(cfg):
+                piece = OmegaConf.load(cfg)
+            else:
+                piece = OmegaConf.create(cfg)
+        elif isinstance(cfg, Mapping):
+            piece = OmegaConf.create(cfg)
+        else:
+            raise TypeError("config must be a mapping or a path string")
+        merged_conf = piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
+    config = OmegaConf.to_container(merged_conf, resolve=False)
     instance.configure(config)
     types = _collect_attr_types(instance, config)
     imports = _collect_imports(instance, config)
@@ -327,7 +353,13 @@ def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
     p_gen = sub.add_parser("gen_types")
-    p_gen.add_argument("--config", "-c", required=True, help="Path to YAML config")
+    p_gen.add_argument(
+        "--config",
+        "-c",
+        required=True,
+        nargs="+",
+        help="One or more configs: YAML/JSON file paths or inline mapping strings",
+    )
     p_gen.add_argument(
         "--class",
         "-C",

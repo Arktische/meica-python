@@ -2,7 +2,9 @@
 
 An all-in-one package makes AI training much easier.
 
-- **trainer**: Config-driven training framework, you **only need to write the forward logic**.
+- **trainer**: Config-driven training framework, 
+  - **Only need to write the forward logic**.
+  - Support IDE intellisense and static type checking. Even the injected dynamic types and attributes from the config file!
 - Coming soon:
   - Diffusion/FlowMatching trainer support
     - QwenImageEdit
@@ -31,6 +33,13 @@ pip install -e .
 If you prefer a quick start, run the example:
 ```python
 python example.py --config config/trainer.yaml config/hypervar.yaml
+```
+
+If you want to generate type and attribute intellisense for the config file, use:
+```bash
+meica gen_types -c config/trainer.yaml config/hypervar.yaml
+# or below if you used custom types from current directory
+PYTHONPATH=$(pwd) meica gen_types -c config/trainer.yaml config/hypervar.yaml
 ```
 
 ### 1. Write two YAML config files
@@ -118,8 +127,9 @@ trainer.configure("config/trainer.yaml", "config/hypervar.yaml")
 trainer.fit()
 ```
 
----
 
+
+---
 ## YAML Configuration Syntax
 
 ### Construct objects
