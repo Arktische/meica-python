@@ -1,0 +1,12 @@
+.pytest_cache/
+*.safetensor
+*.pth
+*.pt
+
+__pycache__/
+
+*.egg-info/
+*.safetensors
+typings/
+.vscode/
+checkpoint*/

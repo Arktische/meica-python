@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meica"
+version = "0.0.1"
+description = "Config-driven instantiation utilities for ML projects"
+requires-python = ">=3.8"
+dependencies = [
+  "accelerate>=1.12.0",
+  "tqdm>=4.67.1",
+  "omegaconf>=2.3.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backbone*", "cli*", "trainer*", "meica*"]
+
+[project.scripts]
+meica = "cli.cli:main"

@@ -1,0 +1,62 @@
+checkpoint_every_n_steps: 1
+checkpoint_dir: "checkpoints"
+checkpoint_top_k_by_val_loss: 2
+
+
+# equivalent to:
+# self.module = torch.nn.Linear(in_features=2, out_features=1)
+# self.module.requires_grad_(True)
+module:
+  type: torch.nn.Linear
+  args:
+    in_features: 2
+    out_features: 1
+  requires_grad_: true
+
+# equivalent to:
+# self.train_dataloader = torch.utils.data.DataLoader(
+#   dataset=example.MyDataset(num=4), 
+#   abatch_size=2, shuffle=True, num_workers=1, drop_last=False
+# )
+train_dataloader:
+  type: torch.utils.data.DataLoader
+  args:
+    dataset:
+      type: example.MyDataset
+      args:
+        num: 4
+    # value reference from hypervar.yaml
+    batch_size: ${batch_size}
+    shuffle: true
+    num_workers: 1
+    drop_last: false
+
+
+val_dataloader:
+  type: torch.utils.data.DataLoader
+  args:
+    dataset:
+      type: example.MyDataset
+      args:
+        num: 4
+    batch_size: ${batch_size}
+    shuffle: false
+    num_workers: 1
+    drop_last: false
+
+
+optimizer:
+  type: torch.optim.SGD
+  args:
+    lr: ${lr}               
+    params:
+      # equivalent to:
+      # call module.parameters()
+      object: ${module} 
+      parameters:
+
+lr_scheduler:
+  type: torch.optim.lr_scheduler.StepLR
+  args:
+    optimizer: ${optimizer} # object reference
+    step_size: 1
