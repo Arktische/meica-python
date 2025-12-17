@@ -2,11 +2,17 @@
 
 An all-in-one package makes AI training much easier. Here are high-level components below:
 
-- `meica.Trainer`: Config-driven training framework, 
-  1. **You Just write the forward logic**.
-  2. 100% compatible with huggingface `accelerate.Accelerator`. That means you can use all features of `accelerate.Accelerator` without any modification.
-  3. All types injected by conf **support IDE intelisense** and **static type checking**, no more messy python code without type hints!
-  4. Config-driven, no more messy `if/else` branch to adapt to different scenarios!
+## Features
+### `meica.Trainer`
+config-driven training framework extends `accelerate.Accelerator`
+- **You Just write the forward logic**.
+
+- 100% compatible with huggingface `accelerate.Accelerator`. That means you can use all features of `accelerate.Accelerator` without any modification.
+
+- All types injected by conf **support IDE intelisense** and **static type checking**, no more messy python code without type hints!
+
+- Config-driven, no more messy `if/else` branch to adapt to different scenarios!
+
 - Coming soon:
   - Diffusion/FlowMatching trainer support
     - QwenImageEdit
