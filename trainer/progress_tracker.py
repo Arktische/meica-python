@@ -9,7 +9,7 @@ STEP = "step"
 ITERATION = "iteration"
 
 
-class Progress:
+class ProgressTracker:
     def __init__(self, trainer):
         self.__global_step__ = 0
         self.__epoch__ = 0

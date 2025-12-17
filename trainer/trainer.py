@@ -1,5 +1,8 @@
 import itertools
 import os
+import logging
+import shutil
+import signal
 from omegaconf import OmegaConf
 import torch
 import accelerate
@@ -12,11 +15,18 @@ from .instantiate import (
     NodeRef,
     PostConfigureContext,
 )
-from .progress import Progress
+from .progress_tracker import ProgressTracker
 from .loss_accumulator import LossAccumulator
 from typing import Callable, Any, Iterable, List, Dict, Union, TypeVar
 
 _T = TypeVar("_T")
+_LOGGER = logging.getLogger("meica")
+if not _LOGGER.handlers:
+    _handler = logging.StreamHandler()
+    _formatter = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s")
+    _handler.setFormatter(_formatter)
+    _LOGGER.addHandler(_handler)
+_LOGGER.setLevel(logging.INFO)
 
 
 def _foreach(
@@ -47,15 +57,8 @@ class Trainer(accelerate.Accelerator):
         super().__init__(*args, **kwargs)
         if self.project_configuration.project_dir is None:
             self.project_configuration.set_directories(os.getcwd())
-        self.__post_configure_contexts__: List[PostConfigureContext] = []
-        self.__configure_done__ = False
-        self.__trainable_modules__: Dict[str, torch.nn.Module] = {}
-        self.__optimizers__: Dict[str, torch.optim.Optimizer] = {}
-        self.__lr_schedulers__: Dict[str, torch.optim.lr_scheduler.LRScheduler] = {}
-        self.__train_dataloader__: Union[torch.utils.data.DataLoader, None] = None
-        self.__train_batch_size__: int = 0
-        self.__total_samples_count__: int = 0
-        self.__val_dataloader__: Union[torch.utils.data.DataLoader, None] = None
+
+        self.__console_logger__: logging.Logger = _LOGGER
         self.epoch: int = 0
         self.manual_backward: bool = False
         self.max_grad_norm: Union[float, None] = None
@@ -64,15 +67,38 @@ class Trainer(accelerate.Accelerator):
         self.checkpoint_every_n_steps: Union[int, None] = None
         self.validate_every_n_steps: Union[int, None] = None
         self.validate_every_n_epochs: Union[int, None] = None
+        self.early_stop_patience: Union[int, None] = None
+        self.early_stop_min_delta: float = 1e-3
+        self.__early_stop_best_val_loss__: Union[float, None] = None
+        self.__early_stop_bad_count__: int = 0
+        self.__early_stop_last_val_loss__: Union[float, None] = None
 
-        self.__progress__ = Progress(self)
+        self.__post_configure_contexts__: List[PostConfigureContext] = []
+        self.__configure_done__ = False
+        self.__trainable_modules__: Dict[str, torch.nn.Module] = {}
+        self.__optimizers__: Dict[str, torch.optim.Optimizer] = {}
+        self.__lr_schedulers__: Dict[str, torch.optim.lr_scheduler.LRScheduler] = {}
+        self.__train_dataloader__: Union[torch.utils.data.DataLoader, None] = None
+        self.__val_dataloader__: Union[torch.utils.data.DataLoader, None] = None
+        self.__progress__ = ProgressTracker(self)
         self.__train_loss_accumulator__ = LossAccumulator(self)
         self.__val_loss_accumulator__ = LossAccumulator(self)
-        self.__topk_checkpoints__: List[Dict[str, Any]] = []
 
     @property
     def auto_backward(self) -> bool:
         return not self.manual_backward
+
+    def log_message(self, message: str, level: str = "info") -> None:
+        if not self.is_local_main_process:
+            return
+        if level == "debug":
+            self.__console_logger__.debug(message)
+        elif level == "warning":
+            self.__console_logger__.warning(message)
+        elif level == "error":
+            self.__console_logger__.error(message)
+        else:
+            self.__console_logger__.info(message)
 
     def __configure_training_components__(
         self,
@@ -289,24 +315,44 @@ class Trainer(accelerate.Accelerator):
                 save_by_epoch = True
         return save_by_step or save_by_epoch
 
-    def __save_checkpoint__(self) -> None:
+    def __save_checkpoint__(
+        self, prefix: str = "checkpoint", apply_total_limit: bool = True
+    ) -> None:
         if self.project_configuration.automatic_checkpoint_naming:
-            checkpoint_dir = self.project_dir
+            output_dir = self.project_dir
         else:
-            checkpoint_dir = os.path.join(
-                (
-                    os.path.join(self.project_dir, "checkpoints")
-                    if self.checkpoint_dir is None
-                    else self.checkpoint_dir
-                ),
-                f"checkpoint_{self.__progress__.global_step}"
+            base_dir = (
+                os.path.join(self.project_dir, "checkpoints")
+                if self.checkpoint_dir is None
+                else self.checkpoint_dir
+            )
+            output_dir = os.path.join(
+                base_dir,
+                f"{prefix}_{self.__progress__.global_step}"
                 f"_epoch_{self.__progress__.epoch}"
                 f"_step_{self.__progress__.step}",
             )
-
-        os.makedirs(checkpoint_dir, exist_ok=True)
+            if (
+                apply_total_limit
+                and self.project_configuration.total_limit is not None
+            ):
+                if os.path.isdir(base_dir):
+                    entries = [
+                        x
+                        for x in os.listdir(base_dir)
+                        if os.path.isdir(os.path.join(base_dir, x))
+                    ]
+                    entries.sort(
+                        key=lambda x: os.path.getmtime(os.path.join(base_dir, x))
+                    )
+                    while len(entries) >= int(self.project_configuration.total_limit):
+                        oldest = entries.pop(0)
+                        shutil.rmtree(
+                            os.path.join(base_dir, oldest), ignore_errors=True
+                        )
+        os.makedirs(output_dir, exist_ok=True)
         self.save_state(
-            output_dir=checkpoint_dir,
+            output_dir=output_dir,
             safe_serialization=True,
         )
 
@@ -353,7 +399,40 @@ class Trainer(accelerate.Accelerator):
                 val_by_epoch = True
         return val_by_step or val_by_epoch
 
-    def __run_validation__(self) -> torch.Tensor:
+    def __should_early_stop__(self) -> bool:
+        if self.early_stop_patience is None or self.early_stop_patience <= 0:
+            return False
+        if self.__early_stop_last_val_loss__ is None:
+            return False
+        if self.__early_stop_best_val_loss__ is None:
+            self.__early_stop_best_val_loss__ = self.__early_stop_last_val_loss__
+            self.__early_stop_bad_count__ = 0
+            return False
+        if (
+            self.__early_stop_best_val_loss__ - self.__early_stop_last_val_loss__
+            > self.early_stop_min_delta
+        ):
+            self.__early_stop_best_val_loss__ = self.__early_stop_last_val_loss__
+            self.__early_stop_bad_count__ = 0
+            return False
+        self.__early_stop_bad_count__ += 1
+        if self.__early_stop_bad_count__ >= self.early_stop_patience:
+            self.log_message(
+                "Early stopping triggered at global_step="
+                + str(self.__progress__.global_step)
+                + ", epoch="
+                + str(self.__progress__.epoch)
+                + ", step="
+                + str(self.__progress__.step)
+                + ", best_val_loss="
+                + f"{self.__early_stop_best_val_loss__:.6f}"
+                + ", last_val_loss="
+                + f"{self.__early_stop_last_val_loss__:.6f}"
+            )
+            return True
+        return False
+
+    def __run_validation__(self):
         if self.__val_dataloader__ is None:
             raise ValueError("dataloader for validation not found which is required")
         # set all trainable modules to eval mode for validation temporarily
@@ -368,8 +447,10 @@ class Trainer(accelerate.Accelerator):
         for module in self.__trainable_modules__.values():
             module.train()
         val_loss = self.__val_loss_accumulator__.finalize()
-        self.log({"val_loss": val_loss.item()}, step=self.__progress__.global_step)
-        return val_loss
+        val_loss_value = float(val_loss.item())
+        self.__early_stop_last_val_loss__ = val_loss_value
+        self.log({"val_loss": val_loss_value}, step=self.__progress__.global_step)
+        # return val_loss
 
     def __training_loop__(self, resume_dir: Union[str, None] = None) -> None:
         if self.__train_dataloader__ is None:
@@ -392,61 +473,89 @@ class Trainer(accelerate.Accelerator):
             else self.__train_dataloader__
         )
 
-        for epoch in range(self.__progress__.epoch, self.epoch):
-            progress_bar = tqdm(
-                range(0, len(self.__train_dataloader__)),
-                initial=(
-                    self.__progress__.step if epoch == self.__progress__.epoch else 0
-                ),
-                desc=f"epoch={epoch}/{self.epoch-1}",
-                disable=not (self.is_local_main_process),
+        def loop_internal():
+            for epoch in range(self.__progress__.epoch, self.epoch):
+                progress_bar = tqdm(
+                    range(0, len(self.__train_dataloader__)),
+                    initial=(
+                        self.__progress__.step
+                        if epoch == self.__progress__.epoch
+                        else 0
+                    ),
+                    desc=f"epoch={epoch}/{self.epoch-1}",
+                    disable=not (self.is_local_main_process),
+                )
+                for step, batch in enumerate(
+                    skipped_dataloader
+                    if epoch == self.__progress__.epoch
+                    else self.__train_dataloader__
+                ):
+                    with self.accumulate(*trainable_modules):
+                        loss = self.train_step(batch, step)
+                        if not isinstance(loss, torch.Tensor) and self.auto_backward:
+                            raise TypeError(
+                                f"train_step must return a {torch.Tensor} in auto backward mode but got {type(loss)}"
+                            )
+                        if self.auto_backward and isinstance(loss, torch.Tensor):
+                            self.__train_loss_accumulator__.update(loss, batch)
+                            self.backward(loss)
+                            if self.sync_gradients:
+                                if self.max_grad_norm is not None:
+                                    self.clip_grad_norm_(
+                                        itertools.chain(
+                                            *[
+                                                module.parameters()
+                                                for module in trainable_modules
+                                            ]
+                                        ),
+                                        self.max_grad_norm,
+                                    )
+                                for optimizer in self.__optimizers__.values():
+                                    optimizer.step()
+                                    optimizer.zero_grad()
+                                for lr_scheduler in self.__lr_schedulers__.values():
+                                    lr_scheduler.step()
+                    if self.sync_gradients:
+                        progress_bar.update(1)
+                        self.__progress__.update(epoch, step)
+                        if self.auto_backward:
+                            avg_loss = self.__train_loss_accumulator__.finalize()
+                            self.log(
+                                {"loss": avg_loss.item()},
+                                step=self.__progress__.global_step,
+                            )
+                            progress_bar.set_postfix(loss=avg_loss.item())
+                        if self.__should_validate__():
+                            self.__run_validation__()
+                            if self.__should_early_stop__():
+                                return
+                        if self.__should_save_checkpoint__():
+                            self.__save_checkpoint__()
+
+        try:
+            loop_internal()
+        except KeyboardInterrupt:
+            self.log_message(
+                "KeyboardInterrupt received, synchronizing and saving checkpoint before exit."
             )
-            for step, batch in enumerate(
-                skipped_dataloader
-                if epoch == self.__progress__.epoch
-                else self.__train_dataloader__
-            ):
-                with self.accumulate(*trainable_modules):
-                    loss = self.train_step(batch, step)
-                    if not isinstance(loss, torch.Tensor) and self.auto_backward:
-                        raise TypeError(
-                            f"train_step must return a {torch.Tensor} in auto backward mode but got {type(loss)}"
-                        )
-                    if self.auto_backward and isinstance(loss, torch.Tensor):
-                        self.__train_loss_accumulator__.update(loss, batch)
-                        self.backward(loss)
-                        if self.sync_gradients:
-                            if self.max_grad_norm is not None:
-                                self.clip_grad_norm_(
-                                    itertools.chain(
-                                        *[
-                                            module.parameters()
-                                            for module in trainable_modules
-                                        ]
-                                    ),
-                                    self.max_grad_norm,
-                                )
-                            for optimizer in self.__optimizers__.values():
-                                optimizer.step()
-                                optimizer.zero_grad()
-                            for lr_scheduler in self.__lr_schedulers__.values():
-                                lr_scheduler.step()
-                if self.sync_gradients:
-                    progress_bar.update(1)
-                    self.__progress__.update(epoch, step)
-                    if self.auto_backward:
-                        avg_loss = self.__train_loss_accumulator__.finalize()
-                        self.log(
-                            {"loss": avg_loss.item()},
-                            step=self.__progress__.global_step,
-                        )
-                        progress_bar.set_postfix(loss=avg_loss.item())
-                    if self.__should_validate__():
-                        val_loss = self.__run_validation__()
-                    if self.__should_save_checkpoint__():
-                        self.__save_checkpoint__()
-        self.wait_for_everyone()
-        self.end_training()
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            self.wait_for_everyone()
+            self.__save_checkpoint__(prefix="interrupt", apply_total_limit=False)
+        except Exception as e:
+            self.log_message(
+                "Exception during training: " + repr(e), level="error"
+            )
+            old_sigint = signal.getsignal(signal.SIGINT)
+            try:
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+                self.wait_for_everyone()
+                self.__save_checkpoint__(prefix="error", apply_total_limit=False)
+            finally:
+                signal.signal(signal.SIGINT, old_sigint)
+            raise
+        finally:
+            self.wait_for_everyone()
+            self.end_training()
 
     def fit(self, resume_dir: Union[str, None] = None):
         """Run the training loop for the configured number of epochs."""

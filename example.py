@@ -49,6 +49,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     trainer = MyTrainer(
         project_dir=args.project_dir,
+        project_config=ProjectConfiguration(
+            logging_dir="logs", total_limit=5
+        ),
     )
     trainer.configure(*args.config)
     trainer.fit(resume_dir=args.resume_dir)
