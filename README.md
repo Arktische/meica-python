@@ -7,9 +7,9 @@ An all-in-one package makes AI training much easier. Here are high-level compone
 config-driven training framework extends `accelerate.Accelerator`
 - **You Just write the forward logic**.
 
-- 100% compatible with huggingface `accelerate.Accelerator`. That means you can use all features of `accelerate.Accelerator` without any modification.
+- Tired of learning new framework? You don't have to! We are 100% compatible with huggingface `accelerate.Accelerator`.
 
-- All types injected by conf **support IDE intelisense** and **static type checking**, no more messy python code without type hints!
+- All types injected by conf **support IDE intelisense** and **static type checking**.
 
 - Config-driven, no more messy `if/else` branch to adapt to different scenarios!
 

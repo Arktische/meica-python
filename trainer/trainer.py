@@ -279,6 +279,11 @@ class Trainer(accelerate.Accelerator):
             ],
             transform=self.__configure_training_components__,  # type: ignore
         )
+        # move all tensors to device
+        self.register_post_configure(
+            filters=[lambda x: isinstance(x.value, torch.Tensor)],
+            transform=lambda tensors: [t.to(self.device) for t in tensors],
+        )
         _instantiate(root=final_config, node=final_config, keys=[])
 
         _apply_post_configure(
@@ -332,10 +337,7 @@ class Trainer(accelerate.Accelerator):
                 f"_epoch_{self.__progress__.epoch}"
                 f"_step_{self.__progress__.step}",
             )
-            if (
-                apply_total_limit
-                and self.project_configuration.total_limit is not None
-            ):
+            if apply_total_limit and self.project_configuration.total_limit is not None:
                 if os.path.isdir(base_dir):
                     entries = [
                         x
@@ -542,9 +544,7 @@ class Trainer(accelerate.Accelerator):
             self.wait_for_everyone()
             self.__save_checkpoint__(prefix="interrupt", apply_total_limit=False)
         except Exception as e:
-            self.log_message(
-                "Exception during training: " + repr(e), level="error"
-            )
+            self.log_message("Exception during training: " + repr(e), level="error")
             old_sigint = signal.getsignal(signal.SIGINT)
             try:
                 signal.signal(signal.SIGINT, signal.SIG_IGN)
