@@ -1,7 +1,5 @@
 checkpoint_every_n_steps: 1
 checkpoint_dir: "checkpoints"
-checkpoint_top_k_by_val_loss: 2
-
 
 # equivalent to:
 # self.module = torch.nn.Linear(in_features=2, out_features=1)
@@ -24,7 +22,7 @@ train_dataloader:
     dataset:
       type: example.MyDataset
       args:
-        num: 4
+        num: 100
     # value reference from hypervar.yaml
     batch_size: ${batch_size}
     shuffle: true
@@ -38,7 +36,7 @@ val_dataloader:
     dataset:
       type: example.MyDataset
       args:
-        num: 4
+        num: 100
     batch_size: ${batch_size}
     shuffle: false
     num_workers: 1

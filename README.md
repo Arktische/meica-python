@@ -4,7 +4,9 @@ An all-in-one package makes AI training much easier. Here are high-level compone
 
 - `meica.Trainer`: Config-driven training framework, 
   1. **You Just write the forward logic**.
-  2. All types injected by conf **support IDE intelisense andstatic type checking**!
+  2. 100% compatible with huggingface `accelerate.Accelerator`. That means you can use all features of `accelerate.Accelerator` without any modification.
+  3. All types injected by conf **support IDE intelisense** and **static type checking**, no more messy python code without type hints!
+  4. Config-driven, no more messy `if/else` branch to adapt to different scenarios!
 - Coming soon:
   - Diffusion/FlowMatching trainer support
     - QwenImageEdit
@@ -59,7 +61,7 @@ PYTHONPATH=$(pwd) meica gen_types -c config/trainer.yaml config/hypervar.yaml
 
 #### [hypervar.yaml](config/hypervar.yaml)
 ```yaml
-epoch: 2
+epoch: 5
 max_grad_norm: 1.0
 batch_size: 2
 lr: 0.1
@@ -113,18 +115,21 @@ lr_scheduler:
 ### 2. Implement a custom Trainer
 Just write your forward logic and return the loss by overriding `train_step(self, batch, step)`.
 ```python
-import torch.nn.functional as F
-from meica import Trainer
 class MyTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     def train_step(self, batch, step):
         x, y = batch
         out = self.module(x)
         loss = F.mse_loss(out, y)
         return loss
 
-trainer = MyTrainer()
-trainer.configure("config/trainer.yaml", "config/hypervar.yaml")
-trainer.fit()
+    def val_step(self, batch, step):
+        x, y = batch
+        out = self.module(x)
+        loss = F.mse_loss(out, y)
+        return loss
 ```
 
 
@@ -210,20 +215,23 @@ text: "$${value}"            # becomes "${value}"
 mixed: "show $${x} and ${x}" # escapes and interpolates together
 ```
 
-- Paths and list indices are supported
-
+<!-- - Paths and list indices are supported -->
+- Simple list reference
 ```yaml
 values: [10, 20]
 second: "${values[1]}"
-
-# Nested path + list index
+```
+- Nested path + list index
+```yaml
 a:
   b:
     - 1
     - 2
 c: "${a.b[0]}"   # -> 1
-
-# Deeper chain with object fields in list items
+```
+- Deeper chain with object fields in list items
+```yaml
+# 
 d:
   e:
     - { foo: "bar" }

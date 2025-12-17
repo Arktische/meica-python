@@ -104,7 +104,7 @@ def _parse_keys_path(keys_path: str) -> List[Union[str, int]]:
 
 
 @dataclass
-class _RefTracker:
+class RefTracker:
     """Tracks reference resolution state during config instantiation.
 
     Maintains two sets of path strings:
@@ -157,31 +157,31 @@ class NodeRef(Generic[_T]):
         self.value = val
 
 
-class _PostConfigureContext:
+class PostConfigureContext:
     def __init__(
         self,
         filters: List[Callable[[NodeRef], bool]],
         transform: Callable[[List[NodeRef]], None],
     ):
         """Collect matching _DictRef nodes and apply a bulk transform at the end."""
-        self.filters: List[Callable[[NodeRef]], bool] = filters
+        self.filters: List[Callable[[NodeRef], bool]] = filters
         self.candidates: List[List[NodeRef]] = [[] for _ in range(len(self.filters))]
         self.transform: Callable[[List[NodeRef]], None] = transform
-        self._value_ids: List[Set[int]] = [set() for _ in range(len(self.filters))]
+        self.value_ids: List[Set[int]] = [set() for _ in range(len(self.filters))]
 
     def collect(self, node: NodeRef):
         for i, filter in enumerate(self.filters):
             if filter(node):
                 value_id = id(node.value)
-                if value_id not in self._value_ids[i]:
-                    self._value_ids[i].add(value_id)
+                if value_id not in self.value_ids[i]:
+                    self.value_ids[i].add(value_id)
                     self.candidates[i].append(node)
 
     def apply(self):
         self.transform(*self.candidates)
 
 
-def _apply_post_configure(root: Dict[Any, Any], contexts: List[_PostConfigureContext]):
+def _apply_post_configure(root: Dict[Any, Any], contexts: List[PostConfigureContext]):
     _apply_post_configure_core(root=root, keys=[], node=root, contexts=contexts)
     for ctx in contexts:
         ctx.apply()
@@ -191,7 +191,7 @@ def _apply_post_configure_core(
     root: Dict[Any, Any],
     keys: List[Union[str, int]],
     node: Any,
-    contexts: List[_PostConfigureContext],
+    contexts: List[PostConfigureContext],
 ):
     if isinstance(node, dict):
         for key, value in node.items():
@@ -217,7 +217,7 @@ def _apply_post_configure_core(
 def _resolve_reference_value(
     root: Dict[Any, Any],
     keys_path: str,
-    tracker: _RefTracker,
+    tracker: RefTracker,
     current_path: str,
 ):
     target_keys = _parse_keys_path(keys_path)
@@ -246,7 +246,7 @@ def _resolve_string_value(
     root: Dict[Any, Any],
     keys: List[Union[str, int]],
     value: str,
-    tracker: _RefTracker,
+    tracker: RefTracker,
     path_str: str,
 ):
     m = re.fullmatch(r"\$\{\s*([^\}]+?)\s*\}", value)
@@ -306,7 +306,7 @@ def _instantiate(
     root: Dict[Any, Any],
     keys: List[Union[str, int]],
     node: Any,
-    tracker: Optional[_RefTracker] = None,
+    tracker: Optional[RefTracker] = None,
 ):
     """Instantiate a configuration tree with type construction and references.
 
@@ -322,7 +322,7 @@ def _instantiate(
     """
     # Initialize tracker if not provided
     if tracker is None:
-        tracker = _RefTracker()
+        tracker = RefTracker()
 
     path_str = _format_keys_path(keys) if keys else ""
 
