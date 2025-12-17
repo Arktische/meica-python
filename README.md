@@ -13,7 +13,7 @@ config-driven training framework extends `accelerate.Accelerator`
 
 - Config-driven, no more messy `if/else` branch to adapt to different scenarios!
 
-- Automatically save checkpoints when interrupted or exception raised.
+- Your training state is always secured, we will automatically save checkpoints when interrupted or exception raised. 
 
 - Coming soon:
   - Diffusion/FlowMatching trainer support
