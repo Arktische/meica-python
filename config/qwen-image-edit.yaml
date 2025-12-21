@@ -4,7 +4,6 @@ vae_type: AutoencoderKLQwenImage
 pipeline_type: QwenImageEditPipeline
 noise_scheduler_type: FlowMatchEulerDiscreteScheduler
 
-
 vae:
   type: diffusers.${vae_type}.from_pretrained
   params:
@@ -23,5 +22,19 @@ noise_scheduler:
     pretrained_model_name_or_path: ${model_name}
     subfolder: scheduler
 
-train_step:
-  
+latents_std:
+  type: torch.tensor
+  args:
+    - object:
+        object: ${vae}
+        config:
+      latents_std:
+  view:
+    - 1
+    - 1
+    - object:
+        object: ${vae}
+        config:
+      zdim:
+    - 1
+    - 1

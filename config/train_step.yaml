@@ -1,0 +1,21 @@
+
+
+
+prompt_embedding:
+  type: meica.diffusionkit.encode_prompt
+  args:
+    prompt: ${batch[0]}
+
+pixel_latents:
+  type: meica.diffusionkit.encode_pixel_latents
+  args:
+    vae: ${vae}
+    pixel_values:
+      - ${batch[1]}
+      - ${batch[2]}
+
+noisy_latents:
+  type: meica.diffusionkit.add_noise
+  args:
+    latents: ${pixel_latents}
+    noise_scheduler: ${noise_scheduler}

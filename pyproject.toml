@@ -16,7 +16,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cli*", "trainer*", "meica*"]
+include = ["cli*", "trainer*", "meica*", "diffusionkit*"] 
 
 [project.scripts]
 meica = "cli.cli:main"
