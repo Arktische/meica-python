@@ -1,13 +1,14 @@
 
 
 
-prompt_embedding:
-  type: meica.diffusionkit.encode_prompt
+"prompt_embedding, prompt_embedding_mask":
+  type: meica.encode_prompt
   args:
+    text_encoder: ${pipeline}
     prompt: ${batch[0]}
 
 pixel_latents:
-  type: meica.diffusionkit.encode_pixel_latents
+  type: meica.encode_latent
   args:
     vae: ${vae}
     pixel_values:
