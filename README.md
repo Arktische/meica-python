@@ -42,14 +42,14 @@ pip install -e .
 ## Quick Start & Explained Example
 If you prefer a quick start, run the example:
 ```python
-python example.py --config config/trainer.yaml config/hypervar.yaml
+python example.py --config config/example/trainer.yaml config/example/hypervar.yaml
 ```
 
 If you want to generate type and attribute intellisense for the config file, use:
 ```bash
-meica gen_types -c config/trainer.yaml config/hypervar.yaml
+meica gen_types -c config/example/trainer.yaml config/example/hypervar.yaml
 # or below if you used custom types from current directory
-PYTHONPATH=$(pwd) meica gen_types -c config/trainer.yaml config/hypervar.yaml
+PYTHONPATH=$(pwd) meica gen_types -c config/example/trainer.yaml config/example/hypervar.yaml
 ```
 
 ### 1. Write two YAML config files
@@ -67,7 +67,7 @@ PYTHONPATH=$(pwd) meica gen_types -c config/trainer.yaml config/hypervar.yaml
 - Hyperparameters
   - `epoch`, `batch_size`, `lr`, `max_grad_norm`, etc., and can be reused in the components config via `${...}` references.
 
-#### [hypervar.yaml](config/hypervar.yaml)
+#### [hypervar.yaml](config/example/hypervar.yaml)
 ```yaml
 epoch: 5
 max_grad_norm: 1.0
@@ -76,7 +76,7 @@ lr: 0.1
 ```
 
 
-#### [trainer.yaml](config/trainer.yaml)
+#### [trainer.yaml](config/example/trainer.yaml)
 
 ```yaml
 checkpoint_every_n_steps: 1

@@ -1,0 +1,13 @@
+
+
+"x, y": ${batch}
+
+out:
+  object: ${module}
+  __call__: ${x}
+
+loss:
+  type: torch.nn.functional.mse_loss
+  args:
+    - ${out}
+    - ${y}
