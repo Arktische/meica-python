@@ -1,0 +1,258 @@
+
+device:
+  object: ${pipeline}
+  device:
+
+img:
+  object: ${batch}
+  __getitem__: 1
+
+ctrl_img:
+  object: ${batch}
+  __getitem__: 2
+
+prompt:
+  object: ${batch}
+  __getitem__: 0
+
+vae_scale_factor:
+  type: operator.pow
+  args:
+    - 2
+    - type: builtins.len
+      args:
+        object: ${vae}
+        temperal_downsample:
+
+scheduler_timesteps:
+  object:
+    object: ${noise_scheduler}
+    timesteps:
+  to: ${device}
+
+scheduler_sigmas:
+  object:
+    object: ${noise_scheduler}
+    sigmas:
+  to: ${device}
+
+
+
+"prompt_embedding, prompt_embedding_mask":
+  type: diffusers.QwenImageEditPipeline.encode_prompt
+  args:
+    image: ${img}
+    prompt:
+      - ${prompt}
+    device:
+      object: ${pipeline}
+      device:
+    num_images_per_prompt: 1
+    max_sequence_length: 1024
+
+pixel_latents:
+  object:
+    object:
+      object: ${vae}
+      encode: ${img}
+    latent_dist:
+  sample:
+
+c:
+  object: ${pixel_latents}
+  size: 2
+
+h:
+  object: ${pixel_latents}
+  size: 3
+
+w:
+  object: ${pixel_latents}
+  size: 4
+
+
+ctrl_latents:
+  object:
+    object:
+      object: ${vae}
+      encode: ${ctrl_img}
+    latent_dist:
+  sample:
+
+
+
+
+normalized_latents:
+  object: ${normalize_latents}
+  __call__: ${pixel_latents}
+
+u:
+  type: diffusers.training_utils.compute_density_for_timestep_sampling
+  args:
+    weighting_scheme: "none"
+    batch_size: ${batch_size}
+    logit_mean: 0.0
+    logit_std: 1.0
+    mode_scale: 1.29
+
+indices:
+  object:
+    type: torch.mul
+    args:
+      - ${u}
+      - object:
+          object: ${noise_scheduler}
+          config:
+        num_train_timesteps:
+  long:
+
+sigmas:
+  object: ${scheduler_sigmas}
+  __getitem__: ${indices}
+
+timesteps:
+  type: torch.div
+  args:
+    - ${scheduler_timesteps}
+    - 1000
+
+noise:
+  type: torch.randn_like
+  args:
+    shape: ${normalized_latents}
+
+noisy_latents:
+  type: torch.lerp
+  args:
+    start: ${normalized_latents}
+    end: ${noise}
+    weight: ${sigmas}
+
+packed_noisy_latents:
+  type: QwenImageEditPipeline._pack_latents
+  args:
+    latents: ${noisy_latents}
+    batch_size: ${batch_size}
+    num_channels_latents: ${c}
+    height: ${h}
+    width: ${w}
+
+packed_ctrl_latents:
+  type: QwenImageEditPipeline._pack_latents
+  args:
+    latents: ${ctrl_latents}
+    batch_size: ${batch_size}
+    num_channels_latents: ${c}
+    height: ${h}
+    width: ${w}
+
+patched_h:
+  type: operator.floor_div
+  args:
+    - ${h}
+    - 2
+
+patched_w:
+  type: operator.floor_div
+  args:
+    - ${w}
+    - 2
+
+unpack_h:
+  type: operator.mul
+  args:
+    - ${h}
+    - ${vae_scale_factor}
+
+unpack_w:
+  type: operator.mul
+  args:
+    - ${w}
+    - ${vae_scale_factor}
+
+img_shapes:
+  type: list
+  args:
+    type: itertools.repeat
+    args:
+      object:
+        - - 1
+          - ${patched_h}
+          - ${patched_w}
+        - - 1
+          - ${patched_h}
+          - ${patched_w}
+      times: ${batch_size}
+
+text_seq_lens:
+  object:
+    object: ${prompt_embedding_mask}
+    sum:
+      dim: 1
+  tolist:
+
+concated_latents:
+  type: torch.cat
+  args:
+    tensors:
+      - ${packed_noisy_latents}
+      - ${packed_ctrl_latents}
+    dim: 1
+
+model_pred:
+  type: QwenImageEditPipeline._unpack_latents
+  args:
+    latents:
+      object:
+        object:
+          object: ${transformer}
+          __call__:
+            hidden_states: ${concated_latents}
+            encoder_hidden_states: ${prompt_embedding}
+            encoder_hidden_states_mask: ${prompt_embedding_mask}
+            guidance: null
+            return_dict: false
+            text_seq_lens: ${text_seq_lens}
+            timestep: ${timesteps}
+        __getitem__: 0
+      __getitem__:
+        - type: builtins.slice
+          args: null 
+        - type: builtins.slice
+          args:
+            - null
+            - object: ${concated_latents}
+              size: 1
+    height: ${unpack_h}
+    width: ${unpack_w}
+    vae_scale_factor: ${vae_scale_factor}
+    
+
+loss_weighting:
+  type: diffusers.training_utils.compute_loss_weighting_for_sd3
+  args:
+    weighting_scheme: "none"
+    sigmas: ${sigmas}
+
+
+target:
+  type: torch.sub
+  args:
+    - ${noise}
+    - ${pixel_latents}
+  permute: [0, 2, 1, 3, 4]
+
+loss:
+  type: torch.mul
+  args:
+    - ${loss_weighting}
+    - type: torch.nn.functional.mse_loss
+      args:
+        input:
+          object: ${model_pred}
+          float: 
+        target:
+          object: ${target}
+          float: 
+        reduction: "none"
+  mean:
