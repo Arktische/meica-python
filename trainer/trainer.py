@@ -10,14 +10,15 @@ from types import SimpleNamespace
 from torch.nn import Module
 from tqdm.auto import tqdm
 from .instantiate import (
-    _apply_post_configure,
-    _instantiate,
+    instantiate,
+    apply_post_configure_to_dict,
+    apply_post_configure_to_class,
     NodeRef,
     PostConfigureContext,
 )
 from .progress_tracker import ProgressTracker
 from .loss_accumulator import LossAccumulator
-from typing import Callable, Any, Iterable, List, Dict, Union, TypeVar
+from typing import Callable, Any, Iterable, List, Dict, Union, TypeVar, Tuple
 
 _T = TypeVar("_T")
 _LOGGER = logging.getLogger("meica")
@@ -39,10 +40,6 @@ def _foreach(
 
 def _trainable_parameters(self: Module):
     return filter(lambda p: p.requires_grad, self.parameters())
-
-
-# Attach a convenience attribute to torch.nn.Module for filtering trainable params.
-Module.trainable_parameters = _trainable_parameters  # type: ignore
 
 
 class Trainer(accelerate.Accelerator):
@@ -100,23 +97,16 @@ class Trainer(accelerate.Accelerator):
         else:
             self.__console_logger__.info(message)
 
+    def __configure_tensors__(self, tensors: List[NodeRef[torch.Tensor]]):
+        for tensor in tensors:
+            tensor.set(tensor.value.to(self.device))
+
     def __configure_training_components__(
         self,
         modules: List[NodeRef[torch.nn.Module]],
         optimizers: List[NodeRef[torch.optim.Optimizer]],
         lr_schedulers: List[NodeRef[torch.optim.lr_scheduler.LRScheduler]],
-        train_dataloaders: List[NodeRef[torch.utils.data.DataLoader]],
-        val_dataloaders: List[NodeRef[torch.utils.data.DataLoader]],
     ):
-        if not len(train_dataloaders) == 1:
-            raise ValueError(
-                f"Only 1 dataloader for training is allowed but got {len(train_dataloaders)}."
-            )
-        if len(val_dataloaders) > 1:
-            raise ValueError(
-                "Either no dataloader for validation or only one dataloader for validation but got "
-                f"{len(val_dataloaders)}."
-            )
         if not len(optimizers) > 0:
             raise ValueError("No optimizer is configured.")
 
@@ -125,15 +115,8 @@ class Trainer(accelerate.Accelerator):
 
         _foreach(
             func=lambda x: x.set(self.prepare(x.value)),
-            items=itertools.chain(
-                modules, optimizers, lr_schedulers, train_dataloaders, val_dataloaders
-            ),
+            items=itertools.chain(modules, optimizers, lr_schedulers),
         )
-
-        self.__train_dataloader__ = train_dataloaders[0].value
-
-        if len(val_dataloaders) == 1:
-            self.__val_dataloader__ = val_dataloaders[0].value
 
         _foreach(
             func=lambda x: (
@@ -152,7 +135,7 @@ class Trainer(accelerate.Accelerator):
             items=lr_schedulers,
         )
 
-    def register_post_configure(
+    def register_for_post_configure(
         self,
         filters: List[Callable[[NodeRef[Any]], bool]],
         transform: Callable[[List[NodeRef[Any]]], None],
@@ -232,7 +215,50 @@ class Trainer(accelerate.Accelerator):
 
         walk([], root)
 
-    def configure(self, *configs: Union[Dict, str]) -> None:
+    def dry_configure_core(self, *configs: Union[Dict, str]) -> None:
+        """Infer types from configs and wire them onto this Trainer without instantiation."""
+        from .type_inference import dry_instantiate
+
+        if self.__configure_done__:
+            raise RuntimeError("Trainer is already configured.")
+
+        if len(configs) == 0:
+            raise ValueError("At least one config must be provided.")
+
+        merged_conf = None
+        for config in configs:
+            if isinstance(config, str):
+                piece = OmegaConf.load(config)
+            elif isinstance(config, Dict):
+                piece = OmegaConf.create(config)
+            else:
+                raise TypeError("config must be a dict or a path string")
+
+            if merged_conf is None:
+                merged_conf = piece
+            else:
+                merged_conf = OmegaConf.merge(merged_conf, piece)
+
+        if merged_conf is None:
+            raise ValueError("No valid config provided.")
+
+        final_config = OmegaConf.to_container(merged_conf, resolve=False)
+        if not isinstance(final_config, Dict):
+            raise TypeError("merged config must be a dictionary-like mapping")
+
+        # In dry mode, we skip post_configure and just infer types
+        dry_instantiate(root=final_config, node=final_config, keys=[])
+
+        # Wire inferred types onto the trainer
+        self.__set_attrs_from_config__(final_config)
+
+    def configure(self, dry_run: bool = False, *configs: Union[Dict, str]) -> None:
+        if dry_run:
+            self.dry_configure_core(*configs)
+        else:
+            self.configure_core(*configs)
+
+    def configure_core(self, *configs: Union[Dict, str]) -> None:
         """Instantiate one or more configs and wire results onto this Trainer.
 
         Each argument may be:
@@ -242,6 +268,9 @@ class Trainer(accelerate.Accelerator):
         All configs are merged in the given order (later overrides earlier),
         then instantiated as a single config tree.
         """
+        if self.__configure_done__:
+            raise RuntimeError("Trainer is already configured.")
+
         if len(configs) == 0:
             raise ValueError("At least one config must be provided.")
 
@@ -267,30 +296,64 @@ class Trainer(accelerate.Accelerator):
             raise TypeError("merged config must be a dictionary-like mapping")
 
         self.__configure_done__ = False
-        self.register_post_configure(
+        self.register_for_post_configure(
             filters=[
                 lambda x: isinstance(x.value, torch.nn.Module),
                 lambda x: isinstance(x.value, torch.optim.Optimizer),
                 lambda x: isinstance(x.value, torch.optim.lr_scheduler.LRScheduler),
-                lambda x: isinstance(x.value, torch.utils.data.DataLoader)
-                and "train".casefold() in x.keys_path.casefold(),
-                lambda x: isinstance(x.value, torch.utils.data.DataLoader)
-                and "val".casefold() in x.keys_path.casefold(),
             ],
             transform=self.__configure_training_components__,  # type: ignore
         )
         # move all tensors to device
-        self.register_post_configure(
+        self.register_for_post_configure(
             filters=[lambda x: isinstance(x.value, torch.Tensor)],
-            transform=lambda tensors: [t.to(self.device) for t in tensors],
+            transform=self.__configure_tensors__,  # type: ignore
         )
-        _instantiate(root=final_config, node=final_config, keys=[])
+        # instantiate all nodes in the config tree
+        instantiate(root=final_config, node=final_config, keys=[])
 
-        _apply_post_configure(
-            root=final_config, contexts=self.__post_configure_contexts__
+        # 1. Collect nodes from instantiated config tree
+        apply_post_configure_to_dict(
+            root=final_config,
+            keys=[],
+            node=final_config,
+            contexts=self.__post_configure_contexts__,
         )
+
+        # 2. Collect nodes from self attributes (subclass components)
+        apply_post_configure_to_class(
+            obj=self, contexts=self.__post_configure_contexts__
+        )
+
+        # 3. Apply all collected transformations
+        for ctx in self.__post_configure_contexts__:
+            ctx.apply()
 
         self.__set_attrs_from_config__(final_config)
+
+        # Configure dataloaders
+        train_dl_candidate = getattr(self, "train_dataloader", None)
+        if train_dl_candidate is not None:
+            if callable(train_dl_candidate) and not isinstance(
+                train_dl_candidate, torch.utils.data.DataLoader
+            ):
+                train_dl = train_dl_candidate()
+            else:
+                train_dl = train_dl_candidate
+            if train_dl is not None:
+                self.__train_dataloader__ = self.prepare(train_dl)
+
+        val_dl_candidate = getattr(self, "val_dataloader", None)
+        if val_dl_candidate is not None:
+            if callable(val_dl_candidate) and not isinstance(
+                val_dl_candidate, torch.utils.data.DataLoader
+            ):
+                val_dl = val_dl_candidate()
+            else:
+                val_dl = val_dl_candidate
+            if val_dl is not None:
+                self.__val_dataloader__ = self.prepare(val_dl)
+
         self.register_for_checkpointing(self.__progress__)
         self.register_for_checkpointing(*list(self.__trainable_modules__.values()))
         self.register_for_checkpointing(*list(self.__optimizers__.values()))
@@ -344,9 +407,20 @@ class Trainer(accelerate.Accelerator):
                         for x in os.listdir(base_dir)
                         if os.path.isdir(os.path.join(base_dir, x))
                     ]
-                    entries.sort(
-                        key=lambda x: os.path.getmtime(os.path.join(base_dir, x))
-                    )
+
+                    def _extract_sort_key(name: str) -> Tuple[int, float]:
+                        full_path = os.path.join(base_dir, name)
+                        ctime = os.path.getctime(full_path)
+                        try:
+                            if "_epoch_" not in name:
+                                return (-1, ctime)
+                            left_part = name.split("_epoch_")[0]
+                            step = int(left_part.split("_")[-1])
+                            return (step, ctime)
+                        except ValueError:
+                            return (-1, ctime)
+
+                    entries.sort(key=_extract_sort_key)
                     while len(entries) >= int(self.project_configuration.total_limit):
                         oldest = entries.pop(0)
                         shutil.rmtree(
@@ -365,6 +439,20 @@ class Trainer(accelerate.Accelerator):
         self.load_state(
             input_dir=resume_dir,
         )
+
+    def train_dataloader(self) -> Union[torch.utils.data.DataLoader, None]:
+        """Return the training dataloader.
+
+        Subclasses can override this method to provide the training dataloader.
+        """
+        return getattr(self, "train_dataloader", None)
+
+    def val_dataloader(self) -> Union[torch.utils.data.DataLoader, None]:
+        """Return the validation dataloader.
+
+        Subclasses can override this method to provide the validation dataloader.
+        """
+        return getattr(self, "val_dataloader", None)
 
     def train_step(self, batch, step: int) -> Union[torch.Tensor, None]:
         """Compute a loss tensor for a single optimization step.
@@ -437,17 +525,27 @@ class Trainer(accelerate.Accelerator):
     def __run_validation__(self):
         if self.__val_dataloader__ is None:
             raise ValueError("dataloader for validation not found which is required")
+
+        # Store original training states
+        original_states = {
+            name: module.training for name, module in self.__trainable_modules__.items()
+        }
+
         # set all trainable modules to eval mode for validation temporarily
         for module in self.__trainable_modules__.values():
             module.eval()
         with torch.no_grad():
             for i, batch in enumerate(self.__val_dataloader__):
                 v = self.val_step(batch, i)
-                if isinstance(v, torch.Tensor):
-                    self.__val_loss_accumulator__.update(v, batch)
-        # set all trainable modules back to train mode
-        for module in self.__trainable_modules__.values():
-            module.train()
+                if not isinstance(v, torch.Tensor):
+                    raise TypeError(
+                        f"val_step must return a torch.Tensor, but got {type(v)}"
+                    )
+                self.__val_loss_accumulator__.update(v, batch)
+        # set all trainable modules back to original mode
+        for name, module in self.__trainable_modules__.items():
+            module.train(original_states[name])
+
         val_loss = self.__val_loss_accumulator__.finalize()
         val_loss_value = float(val_loss.item())
         self.__early_stop_last_val_loss__ = val_loss_value
@@ -476,6 +574,8 @@ class Trainer(accelerate.Accelerator):
         )
 
         def loop_internal():
+            if self.__train_dataloader__ is None:
+                raise ValueError("train dataloader not found which is required")
             for epoch in range(self.__progress__.epoch, self.epoch):
                 progress_bar = tqdm(
                     range(0, len(self.__train_dataloader__)),
