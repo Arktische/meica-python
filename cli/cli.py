@@ -10,7 +10,10 @@ from trainer import Trainer
 def _type_info(val: Any) -> Optional[Tuple[str, str]]:
     if val is None:
         return None
-    t = type(val)
+    if isinstance(val, type):
+        t = val
+    else:
+        t = type(val)
     return (t.__module__, t.__name__)
 
 
@@ -156,13 +159,15 @@ def generate_trainer_base_stub(configs: List[Union[str, Dict[str, Any], Mapping[
             else:
                 piece = OmegaConf.create(cfg)
         elif isinstance(cfg, Mapping):
-            piece = OmegaConf.create(cfg)
+            piece = OmegaConf.create(dict(cfg))
         else:
             raise TypeError("config must be a mapping or a path string")
         merged_conf = piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
     config = OmegaConf.to_container(merged_conf, resolve=False)
+    if not isinstance(config, dict):
+        raise TypeError(f"merged config must be a dict, got {type(config)}")
     trainer = Trainer()
-    trainer.configure(config)
+    trainer.dry_configure(config)
     types = _collect_attr_types(trainer, config)
     imports = _collect_imports(trainer, config)
 
@@ -250,12 +255,14 @@ def generate_subclass_stub(
             else:
                 piece = OmegaConf.create(cfg)
         elif isinstance(cfg, Mapping):
-            piece = OmegaConf.create(cfg)
+            piece = OmegaConf.create(dict(cfg))
         else:
             raise TypeError("config must be a mapping or a path string")
         merged_conf = piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
     config = OmegaConf.to_container(merged_conf, resolve=False)
-    instance.configure(config)
+    if not isinstance(config, dict):
+        raise TypeError(f"merged config must be a dict, got {type(config)}")
+    instance.dry_configure(config)
     types = _collect_attr_types(instance, config)
     imports = _collect_imports(instance, config)
     text = _generate_subclass_stub_text(instance, types, imports)

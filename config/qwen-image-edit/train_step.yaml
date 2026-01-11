@@ -15,48 +15,48 @@ prompt:
   object: ${batch}
   __getitem__: 0
 
-vae_scale_factor:
-  type: operator.pow
-  args:
-    - 2
-    - type: builtins.len
-      args:
-        object: ${vae}
-        temperal_downsample:
+# vae_scale_factor:
+#   type: operator.pow
+#   args:
+#     - 2
+#     - type: builtins.len
+#       args:
+#         object: ${vae}
+#         temperal_downsample:
 
-scheduler_timesteps:
-  object:
-    object: ${noise_scheduler}
-    timesteps:
-  to: ${device}
+# scheduler_timesteps:
+#   object:
+#     object: ${noise_scheduler}
+#     timesteps:
+#   to: ${device}
 
-scheduler_sigmas:
-  object:
-    object: ${noise_scheduler}
-    sigmas:
-  to: ${device}
+# scheduler_sigmas:
+#   object:
+#     object: ${noise_scheduler}
+#     sigmas:
+#   to: ${device}
 
 
 
-"prompt_embedding, prompt_embedding_mask":
-  type: diffusers.QwenImageEditPipeline.encode_prompt
-  args:
-    image: ${img}
-    prompt:
-      - ${prompt}
-    device:
-      object: ${pipeline}
-      device:
-    num_images_per_prompt: 1
-    max_sequence_length: 1024
+# "prompt_embedding, prompt_embedding_mask":
+#   type: diffusers.QwenImageEditPipeline.encode_prompt
+#   args:
+#     image: ${img}
+#     prompt:
+#       - ${prompt}
+#     device:
+#       object: ${pipeline}
+#       device:
+#     num_images_per_prompt: 1
+#     max_sequence_length: 1024
 
-pixel_latents:
-  object:
-    object:
-      object: ${vae}
-      encode: ${img}
-    latent_dist:
-  sample:
+# pixel_latents:
+#   object:
+#     object:
+#       object: ${vae}
+#       encode: ${img}
+#     latent_dist:
+#   sample:
 
 c:
   object: ${pixel_latents}

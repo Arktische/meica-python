@@ -17,9 +17,11 @@ from typing import (
 TYPE = "type"
 ARGS = "args"
 OBJECT = "object"
+CALL = "call"
+METHOD = "method"
 
 
-PRESERVED_KEYS = [TYPE, ARGS, OBJECT]
+PRESERVED_KEYS = [TYPE, ARGS, OBJECT, CALL, METHOD]
 
 PRESERVED_KEY_PREFIX = "_"
 
@@ -133,7 +135,7 @@ _T = TypeVar("_T")
 
 
 class NodeRef(Generic[_T]):
-    def __init__(self, root: Dict[Any, Any], keys: List[Union[str, int]]):
+    def __init__(self, root: Any, keys: List[Union[str, int]]):
         self._root = root
         self._keys = keys
 
@@ -155,6 +157,19 @@ class NodeRef(Generic[_T]):
 
     def set(self, val: _T):
         self.value = val
+
+
+class AttributeRef(NodeRef):
+    def __init__(self, obj: Any, attr_name: str):
+        super().__init__(root=obj, keys=[attr_name])
+
+    @property
+    def value(self) -> Any:
+        return getattr(self._root, str(self._keys[0]))
+
+    @value.setter
+    def value(self, val: Any):
+        setattr(self._root, str(self._keys[0]), val)
 
 
 class PostConfigureContext:
@@ -181,21 +196,21 @@ class PostConfigureContext:
         self.transform(*self.candidates)
 
 
-def _apply_post_configure(root: Dict[Any, Any], contexts: List[PostConfigureContext]):
-    _apply_post_configure_core(root=root, keys=[], node=root, contexts=contexts)
-    for ctx in contexts:
-        ctx.apply()
+# def apply_post_configure(root: Dict[Any, Any], contexts: List[PostConfigureContext]):
+#     _apply_post_configure_core(root=root, keys=[], node=root, contexts=contexts)
+#     for ctx in contexts:
+#         ctx.apply()
 
 
-def _apply_post_configure_core(
-    root: Dict[Any, Any],
+def apply_post_configure_to_dict(
+    root: Any,
     keys: List[Union[str, int]],
     node: Any,
     contexts: List[PostConfigureContext],
 ):
     if isinstance(node, dict):
         for key, value in node.items():
-            _apply_post_configure_core(
+            apply_post_configure_to_dict(
                 root=root,
                 keys=[*keys, key],
                 node=value,
@@ -203,7 +218,7 @@ def _apply_post_configure_core(
             )
     elif isinstance(node, list):
         for index, item in enumerate(node):
-            _apply_post_configure_core(
+            apply_post_configure_to_dict(
                 root=root,
                 keys=[*keys, index],
                 node=item,
@@ -212,6 +227,24 @@ def _apply_post_configure_core(
     else:
         for ctx in contexts:
             ctx.collect(NodeRef(root, keys))
+
+
+def apply_post_configure_to_class(
+    obj: Any,
+    contexts: List[PostConfigureContext],
+):
+    for attr_name in dir(obj):
+        if attr_name.startswith("_"):
+            continue
+        try:
+            val = getattr(obj, attr_name)
+        except Exception:
+            continue
+        # We only collect immediate attributes that match the types we care about
+        # In this unified form, we wrap it in AttributeRef
+        ref = AttributeRef(obj, attr_name)
+        for ctx in contexts:
+            ctx.collect(ref)
 
 
 def _resolve_reference_value(
@@ -232,7 +265,7 @@ def _resolve_reference_value(
         raise ValueError(
             f"reference target not found at '{current_path}' -> '{target_path_str}'"
         ) from e
-    _instantiate(root=root, keys=target_keys, node=target_val, tracker=tracker)
+    instantiate(root=root, keys=target_keys, node=target_val, tracker=tracker)
     try:
         resolved_val = _get_dict_by_keys(root, target_keys)
     except KeyError as e:
@@ -302,11 +335,12 @@ def _resolve_string_value(
     return "".join(parts)
 
 
-def _instantiate(
+def instantiate(
     root: Dict[Any, Any],
     keys: List[Union[str, int]],
     node: Any,
     tracker: Optional[RefTracker] = None,
+    allow_object_processing: bool = True,
 ):
     """Instantiate a configuration tree with type construction and references.
 
@@ -337,11 +371,12 @@ def _instantiate(
     if isinstance(node, dict):
         for key, value in node.items():
             _check_reserved_prefix(key)
-            _instantiate(
+            instantiate(
                 root=root,
                 keys=[*keys, key],
                 node=value,
                 tracker=tracker,
+                allow_object_processing=(key != CALL),
             )
 
         # Construct instance or return type constant
@@ -383,7 +418,7 @@ def _instantiate(
                     setattr(obj, attr_key, attr_args)
             _set_dict_by_keys(root, keys, obj)
 
-        if OBJECT in node:
+        if allow_object_processing and OBJECT in node:
             obj = node[OBJECT]
             node_keys = [*node.keys()]
             node_keys.remove(OBJECT)
@@ -394,40 +429,56 @@ def _instantiate(
                     attr = getattr(obj, attr_key)
                     if callable(attr):
                         if isinstance(attr_args, dict):
-                            (
-                                _set_dict_by_keys(root, keys, attr(**attr_args))
-                                if len(node_keys) == 1
-                                else None
-                            )
+                            attr(**attr_args)
                         elif isinstance(attr_args, list):
-                            (
-                                _set_dict_by_keys(root, keys, attr(*attr_args))
-                                if len(node_keys) == 1
-                                else None
-                            )
+                            attr(*attr_args)
                         else:
-                            (
-                                _set_dict_by_keys(root, keys, attr())
-                                if len(node_keys) == 1
-                                else None
-                            )
+                            attr()
                     else:
                         if attr_args is not None:
                             setattr(obj, attr_key, attr_args)
                         else:
-                            (
-                                _set_dict_by_keys(root, keys, attr)
-                                if len(node_keys) == 1
-                                else None
-                            )
+                            pass
 
                 else:
                     setattr(obj, attr_key, attr_args)
 
+        if CALL in node:
+            call_spec = node[CALL]
+            if not isinstance(call_spec, dict):
+                raise ValueError(f"Value of '{CALL}' must be a dict")
+
+            obj = call_spec.get(OBJECT)
+            method_name = call_spec.get(METHOD)
+            args = call_spec.get(ARGS)
+
+            if obj is None:
+                raise ValueError(f"'{CALL}' spec must contain '{OBJECT}'")
+            if method_name is None:
+                raise ValueError(f"'{CALL}' spec must contain '{METHOD}'")
+
+            if not hasattr(obj, method_name):
+                raise ValueError(f"Object {obj} has no attribute '{method_name}'")
+
+            method = getattr(obj, method_name)
+            if not callable(method):
+                raise ValueError(f"Attribute '{method_name}' of {obj} is not callable")
+
+            if args is None:
+                result = method()
+            elif isinstance(args, list):
+                result = method(*args)
+            elif isinstance(args, dict):
+                result = method(**args)
+            else:
+                raise ValueError(f"'{ARGS}' in '{CALL}' must be list or dict")
+
+            _set_dict_by_keys(root, keys, result)
+
     # Walk list values
     elif isinstance(node, list):
         for index, value in enumerate(node):
-            _instantiate(root=root, keys=[*keys, index], node=value, tracker=tracker)
+            instantiate(root=root, keys=[*keys, index], node=value, tracker=tracker)
 
     # Resolve reference strings and write back
     else:

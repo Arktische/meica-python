@@ -10,6 +10,14 @@ vae:
     pretrained_model_name_or_path: ${model_name}
     subfolder: vae
 
+vae_scale_factor:
+  type: operator.pow
+  args:
+    - 2
+    - type: builtins.len
+      args:
+        object: ${vae}
+        temperal_downsample:
 
 pipeline:
   type: diffusers.${pipeline_type}.from_pretrained
@@ -21,6 +29,14 @@ noise_scheduler:
   params:
     pretrained_model_name_or_path: ${model_name}
     subfolder: scheduler
+
+timesteps:
+    object: ${noise_scheduler}
+    timesteps:
+
+sigmas:
+    object: ${noise_scheduler}
+    sigmas:
 
 normalize_latents:
   type: torchvision.transforms.Normalize

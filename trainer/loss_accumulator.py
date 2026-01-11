@@ -1,5 +1,6 @@
 import torch
 import accelerate
+import logging
 from typing import Dict, Any
 from .batch_util import _get_batch_size
 
@@ -77,7 +78,10 @@ class LossAccumulator:
         ):
             total_count = sample_count.sum().item()
             if total_count == 0:
-                raise ValueError("total_count must be greater than 0")
+                logging.getLogger("meica").warning(
+                    "LossAccumulator: total_count is 0, returning 0.0"
+                )
+                return torch.tensor(0.0, device=self.accelerator.device)
             res = (loss_sum.sum() / sample_count.sum()).detach()
             self.reset()
             return res
