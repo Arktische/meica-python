@@ -3,10 +3,7 @@ import torch
 import io
 import logging
 from torch.utils.data import Dataset
-from typing import Optional
 import numpy as np
-
-from .preprocessor import DatasetItem
 
 logger = logging.getLogger(__name__)
 

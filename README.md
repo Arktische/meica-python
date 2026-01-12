@@ -190,8 +190,10 @@ optimizer:
   args:
     lr: 0.1
     params:
-      object: ${module}
-      trainable_parameters:
+      call:
+        object: ${module}
+        method: trainable_parameters
+        args: []
 ```
 
 ### Reference syntax
