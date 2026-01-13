@@ -139,15 +139,15 @@ def _generate_subclass_stub_text(
             continue
         method_names.add(name)
     for name in sorted(method_names):
-        lines.append(
-            f"    def {name}(self, *args: Any, **kwargs: Any) -> Any: ..."
-        )
+        lines.append(f"    def {name}(self, *args: Any, **kwargs: Any) -> Any: ...")
     for k, v in types.items():
         lines.append(f"    {k}: {v}")
     return "\n".join(lines) + "\n"
 
 
-def generate_trainer_base_stub(configs: List[Union[str, Dict[str, Any], Mapping[str, Any]]]) -> str:
+def generate_trainer_base_stub(
+    configs: List[Union[str, Dict[str, Any], Mapping[str, Any]]],
+) -> str:
     """Generate a Trainer.pyi stub file based on a config-driven Trainer."""
     if not isinstance(configs, list) or len(configs) == 0:
         raise ValueError("at least one config must be provided")
@@ -162,12 +162,14 @@ def generate_trainer_base_stub(configs: List[Union[str, Dict[str, Any], Mapping[
             piece = OmegaConf.create(dict(cfg))
         else:
             raise TypeError("config must be a mapping or a path string")
-        merged_conf = piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
+        merged_conf = (
+            piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
+        )
     config = OmegaConf.to_container(merged_conf, resolve=False)
     if not isinstance(config, dict):
         raise TypeError(f"merged config must be a dict, got {type(config)}")
     trainer = Trainer()
-    trainer.dry_configure(config)
+    trainer.configure(True, config)
     types = _collect_attr_types(trainer, config)
     imports = _collect_imports(trainer, config)
 
@@ -206,7 +208,9 @@ def generate_trainer_base_stub(configs: List[Union[str, Dict[str, Any], Mapping[
         if line_end == -1:
             line_end = len(src_text)
         insert_pos = line_end + 1
-        src_text = src_text[:insert_pos] + "\n".join(attr_lines) + "\n" + src_text[insert_pos:]
+        src_text = (
+            src_text[:insert_pos] + "\n".join(attr_lines) + "\n" + src_text[insert_pos:]
+        )
 
     workspace_root = os.getcwd()
     trainer_mod_name = Trainer.__module__
@@ -241,9 +245,7 @@ def generate_subclass_stub(
     cls = _import_class(qualified_class)
     if not issubclass(cls, Trainer):
         expected = f"{Trainer.__module__}.{Trainer.__qualname__}"
-        raise TypeError(
-            f"class '{qualified_class}' must inherit from {expected}"
-        )
+        raise TypeError(f"class '{qualified_class}' must inherit from {expected}")
     instance = cls()
     if not isinstance(configs, list) or len(configs) == 0:
         raise ValueError("at least one config must be provided")
@@ -258,11 +260,13 @@ def generate_subclass_stub(
             piece = OmegaConf.create(dict(cfg))
         else:
             raise TypeError("config must be a mapping or a path string")
-        merged_conf = piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
+        merged_conf = (
+            piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
+        )
     config = OmegaConf.to_container(merged_conf, resolve=False)
     if not isinstance(config, dict):
         raise TypeError(f"merged config must be a dict, got {type(config)}")
-    instance.dry_configure(config)
+    instance.configure(True, config)
     types = _collect_attr_types(instance, config)
     imports = _collect_imports(instance, config)
     text = _generate_subclass_stub_text(instance, types, imports)
