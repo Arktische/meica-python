@@ -2,7 +2,7 @@ import torch
 import accelerate
 import logging
 from typing import Dict, Any
-from .batch_util import _get_batch_size
+from .batch_util import get_batch_size
 
 
 class LossAccumulator:
@@ -30,7 +30,7 @@ class LossAccumulator:
         )
 
     def update(self, loss: torch.Tensor, batch: Any):
-        batch_size = _get_batch_size(batch)
+        batch_size = get_batch_size(batch)
         if self.last_batch_size_tensor != batch_size:
             self.last_batch_size_tensor.fill_(batch_size)
         self.last_batch_size = batch_size

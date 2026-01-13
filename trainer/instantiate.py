@@ -26,7 +26,7 @@ PRESERVED_KEYS = [TYPE, ARGS, OBJECT, CALL, METHOD]
 PRESERVED_KEY_PREFIX = "_"
 
 
-def _format_keys_path(keys: List[Union[str, int]]):
+def format_keys_path(keys: List[Union[str, int]]):
     parts = []
     for p in keys:
         if isinstance(p, str):
@@ -39,7 +39,7 @@ def _format_keys_path(keys: List[Union[str, int]]):
     return ".".join(parts)
 
 
-def _get_type(string: str, reload=False):
+def get_type(string: str, reload=False):
     module, cls = string.rsplit(".", 1)
     if reload:
         module_imp = importlib.import_module(module)
@@ -47,14 +47,14 @@ def _get_type(string: str, reload=False):
     return getattr(importlib.import_module(module, package=None), cls)
 
 
-def _check_reserved_prefix(key: str):
+def check_reserved_prefix(key: str):
     if isinstance(key, str) and key.startswith(PRESERVED_KEY_PREFIX):
         raise ValueError(
             f"invalid config key with reserved prefix '{PRESERVED_KEY_PREFIX}': {key}"
         )
 
 
-def _set_dict_by_keys(root: Dict[Any, Any], keys: List[Union[str, int]], val: Any):
+def set_dict_by_keys(root: Dict[Any, Any], keys: List[Union[str, int]], val: Any):
     node = root
     for idx, key in enumerate(keys):
         if isinstance(key, str) or isinstance(key, int):
@@ -68,7 +68,7 @@ def _set_dict_by_keys(root: Dict[Any, Any], keys: List[Union[str, int]], val: An
             )
 
 
-def _get_dict_by_keys(root: Dict[Any, Any], keys: List[Union[str, int]]) -> Any:
+def get_dict_by_keys(root: Dict[Any, Any], keys: List[Union[str, int]]) -> Any:
     node = root
     for key in keys:
         if isinstance(key, str) or isinstance(key, int):
@@ -80,17 +80,17 @@ def _get_dict_by_keys(root: Dict[Any, Any], keys: List[Union[str, int]]) -> Any:
     return node
 
 
-def _get_dict_by_keys_path(root: Dict[Any, Any], keys_path: str):
-    keys = _parse_keys_path(keys_path)
-    return _get_dict_by_keys(root, keys)
+def get_dict_by_keys_path(root: Dict[Any, Any], keys_path: str):
+    keys = parse_keys_path(keys_path)
+    return get_dict_by_keys(root, keys)
 
 
-def _set_dict_by_keys_path(root: Dict[Any, Any], keys_path: str, val: Any):
-    keys = _parse_keys_path(keys_path)
-    _set_dict_by_keys(root, keys, val)
+def set_dict_by_keys_path(root: Dict[Any, Any], keys_path: str, val: Any):
+    keys = parse_keys_path(keys_path)
+    set_dict_by_keys(root, keys, val)
 
 
-def _parse_keys_path(keys_path: str) -> List[Union[str, int]]:
+def parse_keys_path(keys_path: str) -> List[Union[str, int]]:
     parts = []
     for token in keys_path.split("."):
         if "[" in token and token.endswith("]"):
@@ -145,15 +145,15 @@ class NodeRef(Generic[_T]):
 
     @property
     def keys_path(self) -> str:
-        return _format_keys_path(self._keys)
+        return format_keys_path(self._keys)
 
     @property
     def value(self) -> _T:
-        return _get_dict_by_keys(self._root, self._keys)
+        return get_dict_by_keys(self._root, self._keys)
 
     @value.setter
     def value(self, val: _T):
-        _set_dict_by_keys(self._root, self._keys, val)
+        set_dict_by_keys(self._root, self._keys, val)
 
     def set(self, val: _T):
         self.value = val
@@ -247,27 +247,27 @@ def apply_post_configure_to_class(
             ctx.collect(ref)
 
 
-def _resolve_reference_value(
+def resolve_reference_value(
     root: Dict[Any, Any],
     keys_path: str,
     tracker: RefTracker,
     current_path: str,
 ):
-    target_keys = _parse_keys_path(keys_path)
-    target_path_str = _format_keys_path(target_keys)
+    target_keys = parse_keys_path(keys_path)
+    target_path_str = format_keys_path(target_keys)
     if tracker.is_visiting(target_path_str):
         raise ValueError(
             f"circular reference detected at '{current_path}' -> '{target_path_str}'"
         )
     try:
-        target_val = _get_dict_by_keys(root, target_keys)
+        target_val = get_dict_by_keys(root, target_keys)
     except KeyError as e:
         raise ValueError(
             f"reference target not found at '{current_path}' -> '{target_path_str}'"
         ) from e
     instantiate(root=root, keys=target_keys, node=target_val, tracker=tracker)
     try:
-        resolved_val = _get_dict_by_keys(root, target_keys)
+        resolved_val = get_dict_by_keys(root, target_keys)
     except KeyError as e:
         raise ValueError(
             f"reference target not found at '{current_path}' -> '{target_path_str}'"
@@ -275,7 +275,7 @@ def _resolve_reference_value(
     return resolved_val
 
 
-def _resolve_string_value(
+def resolve_string_value(
     root: Dict[Any, Any],
     keys: List[Union[str, int]],
     value: str,
@@ -287,7 +287,7 @@ def _resolve_string_value(
         keys_path = m.group(1).strip()
         if not keys_path:
             raise ValueError(f"invalid empty reference at '{path_str}'")
-        resolved_val = _resolve_reference_value(
+        resolved_val = resolve_reference_value(
             root=root,
             keys_path=keys_path,
             tracker=tracker,
@@ -316,7 +316,7 @@ def _resolve_string_value(
                 expr = s[i + 2 : end].strip()
                 if not expr:
                     raise ValueError(f"invalid empty reference at '{path_str}'")
-                resolved_val = _resolve_reference_value(
+                resolved_val = resolve_reference_value(
                     root=root,
                     keys_path=expr,
                     tracker=tracker,
@@ -358,7 +358,7 @@ def instantiate(
     if tracker is None:
         tracker = RefTracker()
 
-    path_str = _format_keys_path(keys) if keys else ""
+    path_str = format_keys_path(keys) if keys else ""
 
     # Cycle detection and memoization
     if tracker.is_visiting(path_str):
@@ -370,7 +370,7 @@ def instantiate(
     # Walk mapping values
     if isinstance(node, dict):
         for key, value in node.items():
-            _check_reserved_prefix(key)
+            check_reserved_prefix(key)
             instantiate(
                 root=root,
                 keys=[*keys, key],
@@ -381,7 +381,7 @@ def instantiate(
 
         # Construct instance or return type constant
         if TYPE in node:
-            type_obj = _get_type(node[TYPE])
+            type_obj = get_type(node[TYPE])
             node_keys = [*node.keys()]
             node_keys.remove(TYPE)
             if ARGS in node:
@@ -416,7 +416,7 @@ def instantiate(
                             pass
                 else:
                     setattr(obj, attr_key, attr_args)
-            _set_dict_by_keys(root, keys, obj)
+            set_dict_by_keys(root, keys, obj)
 
         if allow_object_processing and OBJECT in node:
             obj = node[OBJECT]
@@ -473,7 +473,7 @@ def instantiate(
             else:
                 raise ValueError(f"'{ARGS}' in '{CALL}' must be list or dict")
 
-            _set_dict_by_keys(root, keys, result)
+            set_dict_by_keys(root, keys, result)
 
     # Walk list values
     elif isinstance(node, list):
@@ -483,7 +483,7 @@ def instantiate(
     # Resolve reference strings and write back
     else:
         if isinstance(node, str):
-            resolved = _resolve_string_value(
+            resolved = resolve_string_value(
                 root=root,
                 keys=keys,
                 value=node,
@@ -491,7 +491,7 @@ def instantiate(
                 path_str=path_str,
             )
             if resolved is not node:
-                _set_dict_by_keys(root, keys, resolved)
+                set_dict_by_keys(root, keys, resolved)
 
     # Mark path as resolved
     tracker.mark_resolved(path_str)

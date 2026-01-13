@@ -20,14 +20,14 @@ class BinaryCompactDataset(Dataset):
         self.cache_dir = cache_dir
         self._file_handles = {}
         self._pid = None
-        
+
         metadata_path = os.path.join(cache_dir, "metadata.pth")
         if not os.path.exists(metadata_path):
             raise RuntimeError(
                 f"Metadata file 'metadata.pth' not found in {cache_dir}. "
                 "Please run the Preprocessor first to generate the cache and metadata."
             )
-        
+
         logger.info(f"Loading dataset items from {metadata_path}")
         self.item_names = torch.load(metadata_path, weights_only=True)
 
@@ -89,7 +89,7 @@ class BinaryCompactDataset(Dataset):
         if item_name not in self._file_handles:
             data_path = os.path.join(self.cache_dir, f"{item_name}.bin")
             self._file_handles[item_name] = open(data_path, "rb")
-        
+
         return self._file_handles[item_name]
 
     def close(self):

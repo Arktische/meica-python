@@ -58,6 +58,7 @@ class Trainer(accelerate.Accelerator):
         self.__console_logger__: logging.Logger = _LOGGER
         self.epoch: int = 0
         self.manual_backward: bool = False
+        self.manual_checkpointing: bool = False
         self.max_grad_norm: Union[float, None] = None
         self.checkpoint_dir: Union[str, None] = None
         self.checkpoint_every_n_epochs: Union[int, None] = None
@@ -355,7 +356,8 @@ class Trainer(accelerate.Accelerator):
                 self.__val_dataloader__ = self.prepare(val_dl)
 
         self.register_for_checkpointing(self.__progress__)
-        self.register_for_checkpointing(*list(self.__trainable_modules__.values()))
+        if not self.manual_checkpointing:
+            self.register_for_checkpointing(*list(self.__trainable_modules__.values()))
         self.register_for_checkpointing(*list(self.__optimizers__.values()))
         self.register_for_checkpointing(*list(self.__lr_schedulers__.values()))
         self.register_for_checkpointing(self.__train_loss_accumulator__)

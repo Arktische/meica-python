@@ -1,16 +1,20 @@
 import importlib
 import inspect
 import logging
-from typing import Any, Dict, List, Union, Optional, Tuple, TypeVar, Generic, get_type_hints
+from typing import (
+    Any,
+    Dict,
+    List,
+    Union,
+    Optional,
+    get_type_hints,
+)
 from .instantiate import (
-    _parse_keys_path,
-    _format_keys_path,
-    _set_dict_by_keys,
-    _get_dict_by_keys,
-    _resolve_string_value,
-    _check_reserved_prefix,
+    format_keys_path,
+    set_dict_by_keys,
+    resolve_string_value,
+    check_reserved_prefix,
     TYPE,
-    ARGS,
     OBJECT,
     CALL,
     METHOD,
@@ -18,6 +22,7 @@ from .instantiate import (
 )
 
 _LOGGER = logging.getLogger("meica")
+
 
 def _get_object_from_path(path: str) -> Any:
     """More robust version of _get_type that can traverse attributes."""
@@ -33,44 +38,50 @@ def _get_object_from_path(path: str) -> Any:
             continue
     raise ImportError(f"Cannot find object at path {path}")
 
+
 def _resolve_type(obj: Any) -> Any:
     """Infer the return type of a callable or return the class itself."""
     if inspect.isclass(obj):
         return obj
-    
+
     if callable(obj):
         try:
             # Try to get return type from signature
             sig = inspect.signature(obj)
             ret = sig.return_annotation
-            
+
             if ret is inspect.Signature.empty:
                 # Try get_type_hints for better resolution
                 hints = get_type_hints(obj)
-                ret = hints.get('return', Any)
-            
+                ret = hints.get("return", Any)
+
             # Handle Self (Python 3.11+) or string 'Self'
-            if str(ret) == 'typing.Self' or ret == 'Self':
+            if str(ret) == "typing.Self" or ret == "Self":
                 # If it's a method, we can try to find the class it belongs to
                 if inspect.ismethod(obj):
-                    return obj.__self__ if inspect.isclass(obj.__self__) else type(obj.__self__)
+                    return (
+                        obj.__self__
+                        if inspect.isclass(obj.__self__)
+                        else type(obj.__self__)
+                    )
                 elif inspect.isfunction(obj):
                     # Check if it's a classmethod or staticmethod defined in a class
-                    qualname = getattr(obj, '__qualname__', '')
-                    if '.' in qualname:
-                        cls_name = qualname.rsplit('.', 1)[0]
+                    qualname = getattr(obj, "__qualname__", "")
+                    if "." in qualname:
+                        cls_name = qualname.rsplit(".", 1)[0]
                         # This is a bit hacky, but might work if the class is in the same module
                         mod = importlib.import_module(obj.__module__)
                         return getattr(mod, cls_name, Any)
-            
+
             if ret is Any or ret is inspect.Signature.empty:
                 return Any
             return ret
         except Exception as e:
             _LOGGER.debug(f"Failed to infer type for {obj}: {e}")
             return Any
-    
+
     return type(obj)
+
 
 def dry_instantiate(
     root: Dict[Any, Any],
@@ -83,7 +94,7 @@ def dry_instantiate(
     if tracker is None:
         tracker = RefTracker()
 
-    path_str = _format_keys_path(keys) if keys else ""
+    path_str = format_keys_path(keys) if keys else ""
 
     if tracker.is_visiting(path_str):
         raise ValueError(f"circular reference detected at '{path_str}'")
@@ -94,7 +105,7 @@ def dry_instantiate(
     if isinstance(node, dict):
         # Recursively process children first (to resolve references later)
         for key, value in node.items():
-            _check_reserved_prefix(key)
+            check_reserved_prefix(key)
             dry_instantiate(
                 root=root,
                 keys=[*keys, key],
@@ -108,16 +119,16 @@ def dry_instantiate(
             try:
                 obj = _get_object_from_path(node[TYPE])
                 res_type = _resolve_type(obj)
-                _set_dict_by_keys(root, keys, res_type)
+                set_dict_by_keys(root, keys, res_type)
             except Exception as e:
                 _LOGGER.warning(f"Failed to resolve type {node.get(TYPE)}: {e}")
-                _set_dict_by_keys(root, keys, Any)
+                set_dict_by_keys(root, keys, Any)
 
         # Handle OBJECT nodes (keep as is or infer type)
         elif allow_object_processing and OBJECT in node:
             # If it's already an object, we just take its type
             val = node[OBJECT]
-            _set_dict_by_keys(root, keys, _resolve_type(val))
+            set_dict_by_keys(root, keys, _resolve_type(val))
 
         # Handle CALL nodes
         if CALL in node:
@@ -132,16 +143,16 @@ def dry_instantiate(
                             method = getattr(obj, method_name, None)
                         else:
                             method = getattr(obj, method_name, None)
-                        
+
                         if method:
                             res_type = _resolve_type(method)
-                            _set_dict_by_keys(root, keys, res_type)
+                            set_dict_by_keys(root, keys, res_type)
                         else:
-                            _set_dict_by_keys(root, keys, Any)
+                            set_dict_by_keys(root, keys, Any)
                     except Exception:
-                        _set_dict_by_keys(root, keys, Any)
+                        set_dict_by_keys(root, keys, Any)
             else:
-                _set_dict_by_keys(root, keys, Any)
+                set_dict_by_keys(root, keys, Any)
 
     elif isinstance(node, list):
         for index, value in enumerate(node):
@@ -150,7 +161,7 @@ def dry_instantiate(
     else:
         if isinstance(node, str):
             # References are still resolved, but they will point to types now
-            resolved = _resolve_string_value(
+            resolved = resolve_string_value(
                 root=root,
                 keys=keys,
                 value=node,
@@ -158,6 +169,6 @@ def dry_instantiate(
                 path_str=path_str,
             )
             if resolved is not node:
-                _set_dict_by_keys(root, keys, resolved)
+                set_dict_by_keys(root, keys, resolved)
 
     tracker.mark_resolved(path_str)

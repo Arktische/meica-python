@@ -2,7 +2,7 @@ import torch
 from typing import Dict, List, Tuple, Any
 
 
-def _get_batch_size(batch: Any) -> int:
+def get_batch_size(batch: Any) -> int:
     if isinstance(batch, torch.Tensor):
         if batch.ndim >= 1:
             return batch.shape[0]

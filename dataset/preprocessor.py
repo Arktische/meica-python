@@ -183,7 +183,9 @@ class Preprocessor:
                             struct.pack("Q", current_offsets[item.name])
                         )
                     except Exception as e:
-                        logger.error(f"Error processing item {item.name} for key {key}: {e}")
+                        logger.error(
+                            f"Error processing item {item.name} for key {key}: {e}"
+                        )
                         raise e
 
         finally:
@@ -230,15 +232,17 @@ class Preprocessor:
                         # because it's already covered by the previous rank's last offset
                         # or the initial 0.
                         f_in_idx.seek(8)
-                        
+
                         while True:
-                            chunk = f_in_idx.read(1024 * 1024)  # 1MB of offsets (128k samples)
+                            chunk = f_in_idx.read(
+                                1024 * 1024
+                            )  # 1MB of offsets (128k samples)
                             if not chunk:
                                 break
-                            
+
                             count = len(chunk) // 8
                             part_offsets = struct.unpack(f"{count}Q", chunk)
-                            
+
                             for offset in part_offsets:
                                 adjusted_offset = offset + total_offset
                                 f_out_idx.write(struct.pack("Q", adjusted_offset))
