@@ -74,33 +74,6 @@ def _collect_imports(trainer: Trainer, config: Any) -> Dict[str, Set[str]]:
     return imports
 
 
-def _generate_trainer_stub_text(
-    trainer: Trainer, types: Dict[str, str], imports: Dict[str, Set[str]]
-) -> str:
-    lines: List[str] = []
-    lines.append("from typing import Any")
-    for mod, names in sorted(imports.items()):
-        for name in sorted(names):
-            lines.append(f"from {mod} import {name}")
-    lines.append("")
-    lines.append("class Trainer:")
-    # cls = type(trainer)
-    # method_names: set[str] = set()
-    # for name, func in inspect.getmembers(cls, predicate=inspect.isfunction):
-    #     if name.startswith("_"):
-    #         continue
-    #     if getattr(func, "__module__", None) != cls.__module__:
-    #         continue
-    #     method_names.add(name)
-    # for name in sorted(method_names):
-    #     lines.append(
-    #         f"    def {name}(self, *args: Any, **kwargs: Any) -> Any: ..."
-    #     )
-    for k, v in types.items():
-        lines.append(f"    {k}: {v}")
-    return "\n".join(lines) + "\n"
-
-
 def _import_class(qualified_name: str):
     if not isinstance(qualified_name, str) or "." not in qualified_name:
         raise ValueError("class name must be a fully-qualified dotted path")
@@ -145,97 +118,97 @@ def _generate_subclass_stub_text(
     return "\n".join(lines) + "\n"
 
 
-def generate_trainer_base_stub(
-    configs: List[Union[str, Dict[str, Any], Mapping[str, Any]]],
-) -> str:
-    """Generate a Trainer.pyi stub file based on a config-driven Trainer."""
-    if not isinstance(configs, list) or len(configs) == 0:
-        raise ValueError("at least one config must be provided")
+def _load_config(configs: List[Union[str, Dict[str, Any], Mapping[str, Any]]]) -> Dict[str, Any]:
     merged_conf = None
     for cfg in configs:
         if isinstance(cfg, str):
-            if os.path.exists(cfg):
-                piece = OmegaConf.load(cfg)
-            else:
-                piece = OmegaConf.create(cfg)
+            piece = OmegaConf.load(cfg) if os.path.exists(cfg) else OmegaConf.create(cfg)
         elif isinstance(cfg, Mapping):
             piece = OmegaConf.create(dict(cfg))
         else:
             raise TypeError("config must be a mapping or a path string")
-        merged_conf = (
-            piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
-        )
-    config = OmegaConf.to_container(merged_conf, resolve=False)
-    if not isinstance(config, dict):
-        raise TypeError(f"merged config must be a dict, got {type(config)}")
-    trainer = Trainer()
-    trainer.configure(True, config)
+        merged_conf = piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
+    container = OmegaConf.to_container(merged_conf, resolve=False)
+    if not isinstance(container, dict):
+        raise TypeError(f"merged config must be a dict, got {type(container)}")
+    return container  # type: ignore
+
+
+def _patch_trainer_source(trainer: Trainer, config: Dict[str, Any]) -> str:
     types = _collect_attr_types(trainer, config)
     imports = _collect_imports(trainer, config)
 
-    src_file = inspect.getsourcefile(Trainer) or inspect.getfile(Trainer)
+    src_file = inspect.getsourcefile(type(trainer)) or inspect.getfile(type(trainer))
     if not src_file:
-        raise RuntimeError("cannot determine source file for Trainer")
+        raise RuntimeError(f"cannot determine source file for {type(trainer)}")
     with open(src_file, "r", encoding="utf-8") as f:
         src_text = f.read()
 
-    extra_import_lines: List[str] = []
-    for mod, names in sorted(imports.items()):
-        for name in sorted(names):
-            extra_import_lines.append(f"from {mod} import {name}")
-
-    if extra_import_lines:
+    extra_imports = [f"from {mod} import {name}" for mod, names in sorted(imports.items()) for name in sorted(names)]
+    if extra_imports:
         lines = src_text.splitlines()
-        insert_at = 0
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            insert_at = i
-            break
-        lines[insert_at:insert_at] = extra_import_lines
-        src_text = "\n".join(lines)
-        if not src_text.endswith("\n"):
-            src_text += "\n"
+        insert_at = next((i for i, l in enumerate(lines) if l.strip() and not l.strip().startswith("#")), 0)
+        lines[insert_at:insert_at] = extra_imports
+        src_text = "\n".join(lines) + "\n"
 
     if types:
         attr_lines = [f"    {k}: {v}" for k, v in sorted(types.items())]
-        marker = "class Trainer"
+        marker = f"class {type(trainer).__name__}"
         idx = src_text.find(marker)
-        if idx == -1:
-            raise RuntimeError("class 'Trainer' not found in source")
-        line_end = src_text.find("\n", idx)
-        if line_end == -1:
-            line_end = len(src_text)
-        insert_pos = line_end + 1
-        src_text = (
-            src_text[:insert_pos] + "\n".join(attr_lines) + "\n" + src_text[insert_pos:]
-        )
+        if idx != -1:
+            line_end = src_text.find("\n", idx)
+            insert_pos = (line_end + 1) if line_end != -1 else len(src_text)
+            src_text = src_text[:insert_pos] + "\n".join(attr_lines) + "\n" + src_text[insert_pos:]
+    return src_text
 
-    workspace_root = os.getcwd()
-    trainer_mod_name = Trainer.__module__
-    top_pkg = trainer_mod_name.split(".", 1)[0]
-    stub_root = os.path.join(workspace_root, "typings", top_pkg)
-    os.makedirs(stub_root, exist_ok=True)
-    module_base = os.path.splitext(os.path.basename(src_file))[0]
-    init_pyi = os.path.join(stub_root, "__init__.pyi")
-    with open(init_pyi, "w", encoding="utf-8") as f:
-        f.write(f"from .{module_base} import Trainer\n__all__ = ['Trainer']\n")
-    out_path = os.path.join(stub_root, f"{module_base}.pyi")
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(src_text)
 
-    inst_src_path = os.path.join(os.path.dirname(src_file), "instantiate.py")
-    if os.path.exists(inst_src_path):
-        with open(inst_src_path, "r", encoding="utf-8") as f:
-            inst_src = f.read()
-        inst_out_path = os.path.join(stub_root, "instantiate.pyi")
-        with open(inst_out_path, "w", encoding="utf-8") as f:
-            f.write(inst_src)
-
+def _ensure_workspace_settings(workspace_root: str):
     _ensure_workspace_stub_path_setting(workspace_root, "./typings")
     _ensure_gitignore_exclude(workspace_root, "typings/")
-    return out_path
+
+
+def generate_trainer_base_stub(
+    configs: List[Union[str, Dict[str, Any], Mapping[str, Any]]],
+) -> str:
+    """Generate .pyi stub files for the entire trainer package."""
+    config = _load_config(configs)
+    trainer = Trainer()
+    trainer.configure(True, config)
+
+    trainer_cls_file = inspect.getsourcefile(Trainer) or inspect.getfile(Trainer)
+    package_dir = os.path.dirname(trainer_cls_file)
+    package_name = Trainer.__module__.split(".")[0]
+    workspace_root = os.getcwd()
+    stub_root = os.path.join(workspace_root, "typings", package_name)
+    os.makedirs(stub_root, exist_ok=True)
+
+    main_out_path = ""
+    for filename in os.listdir(package_dir):
+        if not filename.endswith(".py"):
+            continue
+        src_path = os.path.join(package_dir, filename)
+        module_base = os.path.splitext(filename)[0]
+        out_path = os.path.join(stub_root, f"{module_base}.pyi")
+
+        if src_path == trainer_cls_file:
+            content = _patch_trainer_source(trainer, config)
+            main_out_path = out_path
+        else:
+            with open(src_path, "r", encoding="utf-8") as f:
+                content = f.read()
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(content)
+
+    # Ensure __init__.pyi exports Trainer
+    init_pyi = os.path.join(stub_root, "__init__.pyi")
+    if not os.path.exists(init_pyi):
+        module_base = os.path.splitext(os.path.basename(trainer_cls_file))[0]
+        with open(init_pyi, "w", encoding="utf-8") as f:
+            f.write(f"from .{module_base} import Trainer\n__all__ = ['Trainer']\n")
+
+    _ensure_workspace_settings(workspace_root)
+    return main_out_path
 
 
 def generate_subclass_stub(
@@ -246,118 +219,70 @@ def generate_subclass_stub(
     if not issubclass(cls, Trainer):
         expected = f"{Trainer.__module__}.{Trainer.__qualname__}"
         raise TypeError(f"class '{qualified_class}' must inherit from {expected}")
+
+    config = _load_config(configs)
     instance = cls()
-    if not isinstance(configs, list) or len(configs) == 0:
-        raise ValueError("at least one config must be provided")
-    merged_conf = None
-    for cfg in configs:
-        if isinstance(cfg, str):
-            if os.path.exists(cfg):
-                piece = OmegaConf.load(cfg)
-            else:
-                piece = OmegaConf.create(cfg)
-        elif isinstance(cfg, Mapping):
-            piece = OmegaConf.create(dict(cfg))
-        else:
-            raise TypeError("config must be a mapping or a path string")
-        merged_conf = (
-            piece if merged_conf is None else OmegaConf.merge(merged_conf, piece)
-        )
-    config = OmegaConf.to_container(merged_conf, resolve=False)
-    if not isinstance(config, dict):
-        raise TypeError(f"merged config must be a dict, got {type(config)}")
     instance.configure(True, config)
-    types = _collect_attr_types(instance, config)
-    imports = _collect_imports(instance, config)
-    text = _generate_subclass_stub_text(instance, types, imports)
+
+    text = _generate_subclass_stub_text(instance, _collect_attr_types(instance, config), _collect_imports(instance, config))
+
     src_file = inspect.getsourcefile(cls) or inspect.getfile(cls)
     if not src_file:
-        raise RuntimeError(
-            f"cannot determine source file for class '{qualified_class}'"
-        )
+        raise RuntimeError(f"cannot determine source file for class '{qualified_class}'")
+
     module_dir = os.path.dirname(src_file)
     module_base = os.path.splitext(os.path.basename(src_file))[0]
     out_path = os.path.join(module_dir, f"{module_base}.pyi")
+
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(text)
     _ensure_gitignore_exclude(module_dir, os.path.basename(out_path))
-    # Also emit to workspace typings mirror for VSCode stubPath resolution
+
+    # Also emit to workspace typings mirror
     workspace_root = os.getcwd()
-    module_name = qualified_class.rsplit(".", 1)[0]
-    typings_dir = os.path.join(workspace_root, "typings", *module_name.split("."))
+    module_parts = qualified_class.rsplit(".", 1)[0].split(".")
+    typings_dir = os.path.join(workspace_root, "typings", *module_parts)
     os.makedirs(typings_dir, exist_ok=True)
-    typings_out = os.path.join(typings_dir, f"{module_base}.pyi")
     try:
-        with open(typings_out, "w", encoding="utf-8") as f:
+        with open(os.path.join(typings_dir, f"{module_base}.pyi"), "w", encoding="utf-8") as f:
             f.write(text)
     except Exception:
         pass
-    _ensure_workspace_stub_path_setting(workspace_root, "./typings")
-    _ensure_gitignore_exclude(workspace_root, "typings/")
+
+    _ensure_workspace_settings(workspace_root)
     return out_path
+
+
 
 
 def _ensure_gitignore_exclude(dir_path: str, filename: str):
     gi_path = os.path.join(dir_path, ".gitignore")
-    line = filename
-    exists = os.path.exists(gi_path)
-    lines = []
-    if exists:
-        try:
-            with open(gi_path, "r", encoding="utf-8") as f:
-                lines = [l.rstrip("\n") for l in f.readlines()]
-        except Exception:
-            lines = []
-    if line not in lines:
-        try:
-            with open(gi_path, "a", encoding="utf-8") as f:
-                if exists and len(lines) > 0 and not lines[-1].endswith("\n"):
-                    f.write("\n")
-                f.write(line + "\n")
-        except Exception:
-            pass
+    try:
+        lines = open(gi_path).read().splitlines() if os.path.exists(gi_path) else []
+        if filename not in lines:
+            with open(gi_path, "a") as f:
+                if lines and not lines[-1].endswith("\n"): f.write("\n")
+                f.write(f"{filename}\n")
+    except Exception: pass
 
 
 def _ensure_workspace_stub_path_setting(workspace_root: str, stub_root_rel: str):
     vscode_dir = os.path.join(workspace_root, ".vscode")
     os.makedirs(vscode_dir, exist_ok=True)
     settings_path = os.path.join(vscode_dir, "settings.json")
-    settings = {}
-    if os.path.exists(settings_path):
-        try:
-            import json
-
-            with open(settings_path, "r", encoding="utf-8") as f:
-                settings = json.load(f)
-        except Exception:
-            settings = {}
-    stub_paths = settings.get("python.analysis.stubPath")
-    if isinstance(stub_paths, list):
-        if stub_root_rel not in stub_paths:
-            stub_paths.append(stub_root_rel)
-            settings["python.analysis.stubPath"] = stub_paths
-    elif isinstance(stub_paths, str):
-        if stub_paths != stub_root_rel:
-            settings["python.analysis.stubPath"] = [stub_paths, stub_root_rel]
-    else:
-        settings["python.analysis.stubPath"] = [stub_root_rel]
-    extra_paths = settings.get("python.analysis.extraPaths")
-    if isinstance(extra_paths, list):
-        if "typings" not in extra_paths:
-            extra_paths.append("typings")
-            settings["python.analysis.extraPaths"] = extra_paths
-    elif isinstance(extra_paths, str):
-        if extra_paths != "typings":
-            settings["python.analysis.extraPaths"] = [extra_paths, "typings"]
-    else:
-        settings["python.analysis.extraPaths"] = ["typings"]
     try:
         import json
+        settings = json.load(open(settings_path)) if os.path.exists(settings_path) else {}
+        
+        def update_list(key, val):
+            curr = settings.get(key, [])
+            if isinstance(curr, str): curr = [curr]
+            if val not in curr: settings[key] = curr + [val]
 
-        with open(settings_path, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-    except Exception:
-        pass
+        update_list("python.analysis.stubPath", stub_root_rel)
+        update_list("python.analysis.extraPaths", "typings")
+        json.dump(settings, open(settings_path, "w"), indent=2)
+    except Exception: pass
 
 
 def main():
