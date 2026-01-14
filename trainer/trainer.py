@@ -38,10 +38,6 @@ def _foreach(
         func(item)
 
 
-def _trainable_parameters(self: Module):
-    return filter(lambda p: p.requires_grad, self.parameters())
-
-
 class Trainer(accelerate.Accelerator):
     """High-level training loop powered by accelerate and config-driven wiring.
 
@@ -56,17 +52,27 @@ class Trainer(accelerate.Accelerator):
             self.project_configuration.set_directories(os.getcwd())
 
         self.__console_logger__: logging.Logger = _LOGGER
-        self.epoch: int = 0
-        self.manual_backward: bool = False
-        self.manual_checkpointing: bool = False
-        self.max_grad_norm: Union[float, None] = None
-        self.checkpoint_dir: Union[str, None] = None
-        self.checkpoint_every_n_epochs: Union[int, None] = None
-        self.checkpoint_every_n_steps: Union[int, None] = None
-        self.validate_every_n_steps: Union[int, None] = None
-        self.validate_every_n_epochs: Union[int, None] = None
-        self.early_stop_patience: Union[int, None] = None
-        self.early_stop_min_delta: float = 1e-3
+        self.epoch: int = kwargs.get("epoch", 0)
+        self.manual_backward: bool = kwargs.get("manual_backward", False)
+        self.manual_checkpointing: bool = kwargs.get("manual_checkpointing", False)
+        self.max_grad_norm: Union[float, None] = kwargs.get("max_grad_norm", None)
+        self.checkpoint_dir: Union[str, None] = kwargs.get("checkpoint_dir", None)
+        self.checkpoint_every_n_epochs: Union[int, None] = kwargs.get(
+            "checkpoint_every_n_epochs", None
+        )
+        self.checkpoint_every_n_steps: Union[int, None] = kwargs.get(
+            "checkpoint_every_n_steps", None
+        )
+        self.validate_every_n_steps: Union[int, None] = kwargs.get(
+            "validate_every_n_steps", None
+        )
+        self.validate_every_n_epochs: Union[int, None] = kwargs.get(
+            "validate_every_n_epochs", None
+        )
+        self.early_stop_patience: Union[int, None] = kwargs.get(
+            "early_stop_patience", None
+        )
+        self.early_stop_min_delta: float = kwargs.get("early_stop_min_delta", 1e-3)
         self.__early_stop_best_val_loss__: Union[float, None] = None
         self.__early_stop_bad_count__: int = 0
         self.__early_stop_last_val_loss__: Union[float, None] = None

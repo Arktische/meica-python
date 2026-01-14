@@ -2,13 +2,13 @@ import os
 import torch
 import io
 import logging
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset as TorchDataset
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-class BinaryCompactDataset(Dataset):
+class Dataset(TorchDataset):
     def __init__(
         self,
         cache_dir: str,
